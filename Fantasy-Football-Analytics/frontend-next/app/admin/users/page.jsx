@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { ShieldCheck, UserCheck, UserX } from "lucide-react";
 import { getAdminUsers, updateAdminUser } from "@/services/adminService";
+import AdminRoute from "@/components/AdminRoute";
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState([]);
@@ -47,6 +48,7 @@ export default function AdminUsersPage() {
   }
 
   return (
+    <AdminRoute>
     <div className="container mx-auto p-6 md:p-10">
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Admin Users</h1>
@@ -106,5 +108,6 @@ export default function AdminUsersPage() {
         </div>
       </div>
     </div>
+    </AdminRoute>
   );
 }

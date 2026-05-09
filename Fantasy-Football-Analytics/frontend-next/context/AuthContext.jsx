@@ -9,8 +9,9 @@ const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
+  const [isValidatingAuth, setIsValidatingAuth] = useState(true);
   const inactivityTimerRef = useRef(null);
-  const lastActivityRef = useRef(Date.now());
+  const lastActivityRef = useRef(null);
 
   // Function to reset inactivity timer
   const resetInactivityTimer = useRef((logout) => {
@@ -30,34 +31,60 @@ export function AuthProvider({ children }) {
   });
 
   useEffect(() => {
-    // On mount, load auth state from localStorage if present
-    const checkAuth = () => {
+    // On mount, validate auth state from localStorage
+    const validateAuth = async () => {
       try {
         if (typeof window !== "undefined") {
           const storedToken = localStorage.getItem("ff_access");
           const storedUser = localStorage.getItem("ff_user");
-          if (storedToken) {
-            if (storedUser) {
-              const parsed = JSON.parse(storedUser);
-              if (JSON.stringify(user) !== JSON.stringify(parsed)) {
-                setUser(parsed);
-              }
-            } else if (!user) {
-              setUser({ username: null });
+
+          // Import validation functions
+          const { isTokenExpired, validateTokenWithBackend, clearAuthData } = await import("@/services/authService");
+
+          if (!storedToken) {
+            // No token in localStorage - user is logged out
+            setUser(null);
+            setIsValidatingAuth(false);
+            return;
+          }
+
+          // Check if token is expired locally
+          if (isTokenExpired(storedToken)) {
+            console.warn("Token is expired");
+            clearAuthData();
+            setUser(null);
+            setIsValidatingAuth(false);
+            return;
+          }
+
+          // Validate token with backend
+          const userData = await validateTokenWithBackend();
+
+          if (userData) {
+            // Prefer persisted identity/role data for UI and role guards.
+            let parsedStoredUser = null;
+            try {
+              parsedStoredUser = storedUser ? JSON.parse(storedUser) : null;
+            } catch (parseError) {
+              parsedStoredUser = null;
             }
+
+            setUser(parsedStoredUser || userData || { username: null, role: null });
           } else {
-            // Token was removed
-            if (user) {
-              setUser(null);
-            }
+            // Backend validation failed - clear auth data
+            clearAuthData();
+            setUser(null);
           }
         }
       } catch (e) {
-        console.warn("Failed to initialize auth from localStorage", e);
+        console.warn("Failed to validate auth", e);
+        setUser(null);
+      } finally {
+        setIsValidatingAuth(false);
       }
     };
 
-    checkAuth();
+    validateAuth();
 
     // Listen for storage changes from other tabs
     const handleStorageChange = (e) => {
@@ -70,8 +97,8 @@ export function AuthProvider({ children }) {
     };
     window.addEventListener("storage", handleStorageChange);
 
-    // Periodic check for token removal in current tab
-    const interval = setInterval(checkAuth, 2000);
+    // Periodic validation of token in current tab (check every 5 minutes)
+    const interval = setInterval(validateAuth, 5 * 60 * 1000);
 
     return () => {
       window.removeEventListener("storage", handleStorageChange);
@@ -80,7 +107,8 @@ export function AuthProvider({ children }) {
         clearTimeout(inactivityTimerRef.current);
       }
     };
-  }, [user]);
+
+  }, []);
 
   const logout = () => {
     try {
@@ -136,16 +164,18 @@ export function AuthProvider({ children }) {
         }
       };
     }
+
   }, [user]);
 
   const value = useMemo(
     () => ({
       user,
       isAuthenticated: Boolean(user),
+      isValidatingAuth,
       setAuthenticatedUser: setUser,
       logout,
     }),
-    [user]
+    [user, isValidatingAuth]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

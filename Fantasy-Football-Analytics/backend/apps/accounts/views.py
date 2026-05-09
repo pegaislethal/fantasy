@@ -587,7 +587,7 @@ class AdminPlayersView(APIView):
         return Response([_player_payload(player) for player in players])
 
     def post(self, request):
-        required = ['player_api_id', 'name', 'position']
+        required = ['name', 'position']
         missing = [field for field in required if not request.data.get(field)]
         if missing:
             return Response(
@@ -595,8 +595,13 @@ class AdminPlayersView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        player_api_id = request.data.get('player_api_id')
+        if player_api_id is None:
+            last_player = Player.objects.order_by('-player_api_id').first()
+            player_api_id = (last_player.player_api_id + 1) if last_player else 1
+
         player, created = Player.objects.update_or_create(
-            player_api_id=int(request.data.get('player_api_id')),
+            player_api_id=int(player_api_id),
             defaults={
                 'name': request.data.get('name'),
                 'position': request.data.get('position'),

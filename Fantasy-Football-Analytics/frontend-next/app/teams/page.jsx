@@ -49,24 +49,53 @@ export default function TeamsPage() {
   const [selectedSlotIndex, setSelectedSlotIndex] = useState(null);
   const [strategy, setStrategy] = useState(null);
 
+  function readOwnedPlayersFallback() {
+    if (typeof window === "undefined") return [];
+    try {
+      const fromOwnedKey = JSON.parse(localStorage.getItem("ff_owned_players") || "[]");
+      if (Array.isArray(fromOwnedKey) && fromOwnedKey.length) return fromOwnedKey;
+
+      const transferState = JSON.parse(localStorage.getItem("ff_transfer_state") || "{}");
+      const fromTransfer = transferState?.team?.players || transferState?.team?.owned_players || [];
+      return Array.isArray(fromTransfer) ? fromTransfer : [];
+    } catch (e) {
+      console.warn("Failed to read owned players fallback", e);
+      return [];
+    }
+  }
+
+  function sanitizeSelectedPlayers(selectedPlayers, nextOwnedPlayers) {
+    const ownedIds = new Set((nextOwnedPlayers || []).map((p) => String(p?.id)).filter(Boolean));
+    return (selectedPlayers || []).map((player) => {
+      if (!player || typeof player !== "object") return null;
+      return ownedIds.has(String(player.id)) ? player : null;
+    });
+  }
+
   function applyTeamPayload(payload) {
-    const boughtPlayers = payload?.owned_players || [];
+    const fallbackOwned = readOwnedPlayersFallback();
+    const boughtPlayers = Array.isArray(payload?.owned_players) ? payload.owned_players : fallbackOwned;
     const nextSquads = payload?.squads || [];
     const activeId = payload?.active_squad_id || payload?.squad_id || nextSquads[0]?.id || "default";
     const activeSquad = nextSquads.find((squad) => String(squad.id) === String(activeId));
+    const nextSelected = sanitizeSelectedPlayers(payload?.selected_players || payload?.players || [], boughtPlayers);
 
     setOwnedPlayers(boughtPlayers);
     setSquads(nextSquads);
     setCurrentSquadId(activeId);
     setSquadName(payload?.squad_name || activeSquad?.name || "Main Squad");
     setTeam({
-      players: payload?.selected_players || payload?.players || [],
+      players: nextSelected,
       formation: payload?.formation || "4-4-2",
       budget: payload?.budget ?? 50000000,
       transfers_left: payload?.transfers_left ?? 1,
       owned_count: payload?.owned_count ?? boughtPlayers.length,
       max_players: payload?.max_players ?? 15,
     });
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ff_owned_players", JSON.stringify(boughtPlayers || []));
+    }
   }
 
   useEffect(() => {
@@ -76,9 +105,37 @@ export default function TeamsPage() {
         if (!mounted) return;
         if (t) applyTeamPayload(t);
       })
-      .catch((e) => console.warn("Failed to load team or players", e))
+      .catch((e) => {
+        console.warn("Failed to load team or players", e);
+        const fallbackOwned = readOwnedPlayersFallback();
+        if (!mounted) return;
+        setOwnedPlayers(fallbackOwned);
+        setTeam((prev) => ({
+          ...prev,
+          players: sanitizeSelectedPlayers(prev.players, fallbackOwned),
+          owned_count: fallbackOwned.length,
+        }));
+      });
+
+    const syncFromStorage = () => {
+      const fallbackOwned = readOwnedPlayersFallback();
+      setOwnedPlayers(fallbackOwned);
+      setTeam((prev) => ({
+        ...prev,
+        players: sanitizeSelectedPlayers(prev.players, fallbackOwned),
+        owned_count: fallbackOwned.length,
+      }));
+    };
+
+    window.addEventListener("storage", syncFromStorage);
+    window.addEventListener("ff_owned_players_updated", syncFromStorage);
+    window.addEventListener("focus", syncFromStorage);
+
     return () => {
       mounted = false;
+      window.removeEventListener("storage", syncFromStorage);
+      window.removeEventListener("ff_owned_players_updated", syncFromStorage);
+      window.removeEventListener("focus", syncFromStorage);
     };
   }, []);
 
@@ -98,19 +155,14 @@ export default function TeamsPage() {
 
   // Normalize position names for matching
   function normalizePosition(position) {
-    const posMap = {
-      "GK": "GK",
-      "DEF": "DEF",
-      "MID": "MID",
-      "FWD": "FWD",
-      "BENCH": "BENCH",
-      "Goalkeeper": "GK",
-      "Defender": "DEF",
-      "Midfielder": "MID",
-      "Forward": "FWD",
-      "Attacker": "FWD",
-    };
-    return posMap[position?.toUpperCase?.() || position] || position;
+    const raw = String(position || "").trim().toUpperCase();
+    if (!raw) return "";
+    if (["GK", "GOALKEEPER", "GOAL KEEPER", "KEEPER"].includes(raw)) return "GK";
+    if (["DEF", "DEFENDER", "DEFENCE", "DEFENSE", "CB", "RB", "LB"].includes(raw)) return "DEF";
+    if (["MID", "MIDFIELDER", "MIDFIELD", "CM", "CDM", "CAM", "RM", "LM"].includes(raw)) return "MID";
+    if (["FWD", "FW", "FORWARD", "ATTACKER", "OFFENCE", "OFFENSE", "ST", "STRIKER", "WINGER"].includes(raw)) return "FWD";
+    if (raw === "BENCH") return "BENCH";
+    return raw;
   }
 
   function filteredPlayers() {
@@ -130,6 +182,92 @@ export default function TeamsPage() {
     }
     
     return players;
+  }
+
+  function getNumeric(player, keys) {
+    for (const key of keys) {
+      const value = Number(player?.[key]);
+      if (Number.isFinite(value)) return value;
+    }
+    return 0;
+  }
+
+  function playerScore(player, normalizedPos) {
+    const matchesPlayed = getNumeric(player, ["matches_played", "matchesPlayed", "apps", "appearances"]);
+    const goals = getNumeric(player, ["goals", "total_goals", "scored"]);
+    const assists = getNumeric(player, ["assists", "total_assists"]);
+    const cleanSheets = getNumeric(player, ["clean_sheets", "cleanSheets"]);
+    const fantasyPoints = getNumeric(player, ["fantasy_points", "fantasyPoints", "total_points", "points"]);
+    const form = getNumeric(player, ["form", "performance", "rating"]);
+    const value = getNumeric(player, ["value", "cost"]);
+
+    let base = fantasyPoints * 3 + form * 2 + matchesPlayed * 0.5 + value / 1000000;
+    if (normalizedPos === "GK") base += cleanSheets * 3;
+    if (normalizedPos === "DEF") base += cleanSheets * 2 + goals * 2 + assists * 1.5;
+    if (normalizedPos === "MID") base += goals * 2.5 + assists * 2 + cleanSheets * 0.5;
+    if (normalizedPos === "FWD") base += goals * 3 + assists * 1.5;
+    return base;
+  }
+
+  function optimizeSquadPlayers() {
+    const [d, m, f] = team.formation.split("-").map(Number);
+    const required = { GK: 1, DEF: d, MID: m, FWD: f };
+
+    const pools = {
+      GK: [],
+      DEF: [],
+      MID: [],
+      FWD: [],
+    };
+
+    (ownedPlayers || []).forEach((player) => {
+      const normalized = normalizePosition(player?.position);
+      if (pools[normalized]) pools[normalized].push(player);
+    });
+
+    Object.keys(pools).forEach((pos) => {
+      pools[pos].sort((a, b) => playerScore(b, pos) - playerScore(a, pos));
+    });
+
+    const lineup = [];
+    const usedIds = new Set();
+    const missing = [];
+
+    function pickBest(pos) {
+      const next = pools[pos].find((player) => !usedIds.has(String(player?.id)));
+      if (!next) return null;
+      usedIds.add(String(next.id));
+      return next;
+    }
+
+    for (let i = 0; i < required.FWD; i += 1) {
+      const player = pickBest("FWD");
+      if (!player) missing.push("FWD");
+      lineup.push(player || null);
+    }
+    for (let i = 0; i < required.MID; i += 1) {
+      const player = pickBest("MID");
+      if (!player) missing.push("MID");
+      lineup.push(player || null);
+    }
+    for (let i = 0; i < required.DEF; i += 1) {
+      const player = pickBest("DEF");
+      if (!player) missing.push("DEF");
+      lineup.push(player || null);
+    }
+    const gk = pickBest("GK");
+    if (!gk) missing.push("GK");
+    lineup.push(gk || null);
+
+    // Bench: fill with best remaining owned players regardless of position
+    const remaining = (ownedPlayers || [])
+      .filter((player) => !usedIds.has(String(player?.id)))
+      .sort((a, b) => playerScore(b, normalizePosition(b?.position)) - playerScore(a, normalizePosition(a?.position)));
+    for (let i = 0; i < 4; i += 1) {
+      lineup.push(remaining[i] || null);
+    }
+
+    return { lineup, missing };
   }
 
   async function handleChangeFormation(newFormation) {
@@ -229,8 +367,26 @@ export default function TeamsPage() {
     try {
       const suggestions = await getMyTeamSuggestions();
       setStrategy(suggestions);
+
+      const { lineup, missing } = optimizeSquadPlayers();
+      setTeam((prev) => ({ ...prev, players: lineup }));
+
+      const updated = await updateTeam({
+        squad_id: currentSquadId,
+        squad_name: squadName,
+        players: lineup,
+        formation: team.formation,
+      });
+      if (updated) applyTeamPayload(updated);
+
+      if (missing.length > 0) {
+        setSquadMessage("Some slots were left empty. No owned players available for this position.");
+      } else {
+        setSquadMessage("Auto-optimized using your best owned players for the current formation.");
+      }
     } catch (e) {
       console.warn("Failed to load AI strategy", e);
+      setSquadMessage("Failed to auto-optimize squad.");
     }
   }
 
@@ -571,9 +727,9 @@ export default function TeamsPage() {
               ) : selectedSlotIndex !== null && getPositionForSlot(selectedSlotIndex) !== "BENCH" ? (
                 <div className="p-4 text-sm text-muted-foreground border border-dashed border-border rounded bg-muted/20">
                   <p className="font-semibold text-yellow-600 dark:text-yellow-400 mb-2">
-                    No owned {getPositionForSlot(selectedSlotIndex)} available
+                    No owned players available for this position.
                   </p>
-                  <p>You don't have any owned {getPositionForSlot(selectedSlotIndex).toLowerCase()}s matching your filter. Buy one in the Transfer Market.</p>
+                  <p>Buy players in the Transfer Market to fill this slot.</p>
                 </div>
               ) : (
                 <div className="p-4 text-sm text-muted-foreground border border-dashed border-border rounded">

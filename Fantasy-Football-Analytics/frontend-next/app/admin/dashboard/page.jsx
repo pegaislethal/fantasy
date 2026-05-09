@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Activity, Calendar, ShieldCheck, Users } from "lucide-react";
-import { getAdminMatches, getAdminPlayers, getAdminStats } from "@/services/adminService";
+import { getAdminMatches, getAdminPlayers, getAdminStats, saveAdminPlayer } from "@/services/adminService";
+import AdminRoute from "@/components/AdminRoute";
 
 export default function AdminDashboardPage() {
   const [stats, setStats] = useState(null);
@@ -11,6 +12,14 @@ export default function AdminDashboardPage() {
   const [matches, setMatches] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [createPlayerForm, setCreatePlayerForm] = useState({
+    name: "",
+    position: "",
+    team_name: "",
+    cost: "",
+    nationality: "",
+  });
+  const [createPlayerMessage, setCreatePlayerMessage] = useState("");
 
   useEffect(() => {
     let mounted = true;
@@ -35,7 +44,28 @@ export default function AdminDashboardPage() {
     { label: "PL Matches", value: matches.length, icon: Calendar },
   ];
 
+  async function handleCreatePlayer(event) {
+    event.preventDefault();
+    setCreatePlayerMessage("");
+    setError("");
+    try {
+      const created = await saveAdminPlayer({
+        name: createPlayerForm.name,
+        position: createPlayerForm.position,
+        team_name: createPlayerForm.team_name,
+        cost: createPlayerForm.cost,
+        nationality: createPlayerForm.nationality,
+      });
+      setPlayers((prev) => [created, ...prev]);
+      setCreatePlayerForm({ name: "", position: "", team_name: "", cost: "", nationality: "" });
+      setCreatePlayerMessage("Player created successfully.");
+    } catch (err) {
+      setError(err.message || "Failed to create player. Admin access is required.");
+    }
+  }
+
   return (
+    <AdminRoute>
     <div className="container mx-auto p-6 md:p-10 space-y-8">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -94,6 +124,59 @@ export default function AdminDashboardPage() {
           </div>
         </div>
       </div>
+
+      <div className="card p-6">
+        <h2 className="text-xl font-bold mb-4">Create Player</h2>
+        <form onSubmit={handleCreatePlayer} className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <input
+            value={createPlayerForm.name}
+            onChange={(e) => setCreatePlayerForm((p) => ({ ...p, name: e.target.value }))}
+            className="px-3 py-2 rounded-md border border-border bg-background"
+            placeholder="Name"
+            required
+          />
+          <select
+            value={createPlayerForm.position}
+            onChange={(e) => setCreatePlayerForm((p) => ({ ...p, position: e.target.value }))}
+            className="px-3 py-2 rounded-md border border-border bg-background"
+            required
+          >
+            <option value="">Position</option>
+            <option value="Goalkeeper">Goalkeeper</option>
+            <option value="Defender">Defender</option>
+            <option value="Midfielder">Midfielder</option>
+            <option value="Offence">Offence</option>
+          </select>
+          <input
+            value={createPlayerForm.team_name}
+            onChange={(e) => setCreatePlayerForm((p) => ({ ...p, team_name: e.target.value }))}
+            className="px-3 py-2 rounded-md border border-border bg-background"
+            placeholder="Team"
+            required
+          />
+          <input
+            value={createPlayerForm.cost}
+            onChange={(e) => setCreatePlayerForm((p) => ({ ...p, cost: e.target.value }))}
+            className="px-3 py-2 rounded-md border border-border bg-background"
+            placeholder="Cost"
+            type="number"
+            min="0"
+            step="0.01"
+            required
+          />
+          <input
+            value={createPlayerForm.nationality}
+            onChange={(e) => setCreatePlayerForm((p) => ({ ...p, nationality: e.target.value }))}
+            className="px-3 py-2 rounded-md border border-border bg-background"
+            placeholder="Nationality"
+          />
+          <button type="submit" className="btn-primary md:col-span-5 w-fit">
+            Create Player
+          </button>
+        </form>
+        {createPlayerMessage ? <p className="text-sm text-green-500 mt-3">{createPlayerMessage}</p> : null}
+      </div>
     </div>
+    </AdminRoute>
   );
 }

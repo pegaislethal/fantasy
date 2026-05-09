@@ -61,7 +61,9 @@ export default function TransfersPage() {
       setWatchlist(watch || []);
       setHistory(transferHistory || []);
       if (typeof window !== "undefined") {
+        localStorage.setItem("ff_owned_players", JSON.stringify(nextTeam.players || []));
         localStorage.setItem("ff_transfer_state", JSON.stringify({ market, team: nextTeam, watch, transferHistory }));
+        window.dispatchEvent(new Event("ff_owned_players_updated"));
       }
     } catch (e) {
       console.error("Load failed", e);
@@ -112,6 +114,11 @@ export default function TransfersPage() {
       };
       
       const res = await submitTransfer(payload);
+      if (typeof window !== "undefined") {
+        const nextOwnedPlayers = res?.owned_players || res?.team || [];
+        localStorage.setItem("ff_owned_players", JSON.stringify(nextOwnedPlayers));
+        window.dispatchEvent(new Event("ff_owned_players_updated"));
+      }
       setStatus({ type: "success", message: res.message || "Transfer successful!" });
       loadData(); // Refresh state
       setPendingTransfer(null);

@@ -4,8 +4,8 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Users, ShieldCheck, Zap, Plus, ArrowRightLeft, Settings2, Filter, X } from "lucide-react";
-import { getPlayers } from "@/services/footballApiService";
-import { getMyTeam, updateTeam, createNewSquad } from "@/services/teamService";
+import { createNewSquad, getMyTeam, switchSquad, updateTeam } from "@/services/teamService";
+import { getMyTeamSuggestions } from "@/services/predictionService";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { APP_ROUTES } from "@/utils/constants";
 
@@ -36,54 +36,108 @@ const FORMATION_PRESETS = [
 ];
 
 export default function TeamsPage() {
-  const [players, setPlayers] = useState([]);
+  const [ownedPlayers, setOwnedPlayers] = useState([]);
   const [filter, setFilter] = useState("");
-  const [team, setTeam] = useState({ players: [], formation: "4-4-2", budget: 100000000 });
+  const [team, setTeam] = useState({ players: [], formation: "4-4-2", budget: 50000000, transfers_left: 1, owned_count: 0, max_players: 15 });
   const [squads, setSquads] = useState([]);
-  const [currentSquadId, setCurrentSquadId] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [currentSquadId, setCurrentSquadId] = useState("default");
+  const [squadName, setSquadName] = useState("Main Squad");
+  const [newSquadName, setNewSquadName] = useState("");
+  const [squadMessage, setSquadMessage] = useState("");
   const [showPlayerList, setShowPlayerList] = useState(false);
   const [showFormationMenu, setShowFormationMenu] = useState(false);
   const [selectedSlotIndex, setSelectedSlotIndex] = useState(null);
+  const [strategy, setStrategy] = useState(null);
+
+  function applyTeamPayload(payload) {
+    const boughtPlayers = payload?.owned_players || [];
+    const nextSquads = payload?.squads || [];
+    const activeId = payload?.active_squad_id || payload?.squad_id || nextSquads[0]?.id || "default";
+    const activeSquad = nextSquads.find((squad) => String(squad.id) === String(activeId));
+
+    setOwnedPlayers(boughtPlayers);
+    setSquads(nextSquads);
+    setCurrentSquadId(activeId);
+    setSquadName(payload?.squad_name || activeSquad?.name || "Main Squad");
+    setTeam({
+      players: payload?.selected_players || payload?.players || [],
+      formation: payload?.formation || "4-4-2",
+      budget: payload?.budget ?? 50000000,
+      transfers_left: payload?.transfers_left ?? 1,
+      owned_count: payload?.owned_count ?? boughtPlayers.length,
+      max_players: payload?.max_players ?? 15,
+    });
+  }
 
   useEffect(() => {
     let mounted = true;
-    Promise.all([getPlayers(), getMyTeam()])
-      .then(([p, t]) => {
+    getMyTeam()
+      .then((t) => {
         if (!mounted) return;
-        setPlayers(p || []);
-        if (t) {
-          setTeam({ 
-            players: t.players || [], 
-            formation: t.formation || "4-4-2",
-            budget: t.budget || 100000000
-          });
-        }
+        if (t) applyTeamPayload(t);
       })
       .catch((e) => console.warn("Failed to load team or players", e))
-      .finally(() => setLoading(false));
     return () => {
       mounted = false;
     };
   }, []);
 
+  // Get position from slot index based on formation
+  function getPositionForSlot(slotIndex) {
+    const [d, m, f] = team.formation.split("-").map(Number);
+    const def = d;
+    const mid = m;
+    const fwd = f;
+    
+    if (slotIndex < fwd) return "FWD";
+    if (slotIndex < fwd + mid) return "MID";
+    if (slotIndex < fwd + mid + def) return "DEF";
+    if (slotIndex < fwd + mid + def + 1) return "GK";
+    return "BENCH"; // Bench has all positions
+  }
+
+  // Normalize position names for matching
+  function normalizePosition(position) {
+    const posMap = {
+      "GK": "GK",
+      "DEF": "DEF",
+      "MID": "MID",
+      "FWD": "FWD",
+      "BENCH": "BENCH",
+      "Goalkeeper": "GK",
+      "Defender": "DEF",
+      "Midfielder": "MID",
+      "Forward": "FWD",
+      "Attacker": "FWD",
+    };
+    return posMap[position?.toUpperCase?.() || position] || position;
+  }
+
   function filteredPlayers() {
-    return players.filter((p) => p.name && p.name.toLowerCase().includes(filter.toLowerCase()));
+    let players = ownedPlayers.filter((p) => p.name && p.name.toLowerCase().includes(filter.toLowerCase()));
+    
+    // Filter by position if a specific slot is selected
+    if (selectedSlotIndex !== null) {
+      const requiredPosition = getPositionForSlot(selectedSlotIndex);
+      
+      // Bench can have any player
+      if (requiredPosition !== "BENCH") {
+        players = players.filter((p) => {
+          const playerPos = normalizePosition(p.position);
+          return playerPos === requiredPosition;
+        });
+      }
+    }
+    
+    return players;
   }
 
   async function handleChangeFormation(newFormation) {
     setTeam((t) => ({ ...t, formation: newFormation }));
     setShowFormationMenu(false);
     try {
-      const updated = await updateTeam({ players: team.players, formation: newFormation });
-      if (updated) {
-        setTeam((t) => ({ 
-          ...t, 
-          players: updated.players || t.players, 
-          formation: updated.formation || newFormation,
-          budget: updated.budget ?? t.budget
-        }));
-      }
+      const updated = await updateTeam({ squad_id: currentSquadId, squad_name: squadName, players: team.players, formation: newFormation });
+      if (updated) applyTeamPayload(updated);
     } catch (e) {
       console.warn("Failed to update formation", e);
     }
@@ -94,14 +148,8 @@ export default function TeamsPage() {
     newPlayers[slotIndex] = null;
     setTeam((t) => ({ ...t, players: newPlayers }));
     try {
-      const updated = await updateTeam({ players: newPlayers, formation: team.formation });
-      if (updated) {
-        setTeam((t) => ({ 
-          ...t, 
-          players: updated.players || newPlayers,
-          budget: updated.budget ?? t.budget
-        }));
-      }
+      const updated = await updateTeam({ squad_id: currentSquadId, squad_name: squadName, players: newPlayers, formation: team.formation });
+      if (updated) applyTeamPayload(updated);
     } catch (e) {
       console.warn("Failed to remove player", e);
     }
@@ -111,22 +159,16 @@ export default function TeamsPage() {
     // assign player to selected slot
     const newPlayers = team.players ? [...team.players] : [];
     if (selectedSlotIndex == null) {
-      newPlayers.push({ id: player.id, name: player.name });
+      newPlayers.push(player);
     } else {
-      newPlayers[selectedSlotIndex] = { id: player.id, name: player.name };
+      newPlayers[selectedSlotIndex] = player;
     }
     setTeam((t) => ({ ...t, players: newPlayers }));
     setShowPlayerList(false);
     setSelectedSlotIndex(null);
     try {
-      const updated = await updateTeam({ players: newPlayers, formation: team.formation });
-      if (updated) {
-        setTeam((t) => ({ 
-          ...t, 
-          players: updated.players || newPlayers,
-          budget: updated.budget ?? t.budget
-        }));
-      }
+      const updated = await updateTeam({ squad_id: currentSquadId, squad_name: squadName, players: newPlayers, formation: team.formation });
+      if (updated) applyTeamPayload(updated);
     } catch (e) {
       console.warn("Failed to update team", e);
     }
@@ -134,18 +176,62 @@ export default function TeamsPage() {
 
   async function handleNewSquad() {
     try {
-      const res = await createNewSquad(team.formation);
+      const name = newSquadName.trim() || `Squad ${squads.length + 1}`;
+      const res = await createNewSquad(name, team.formation);
       if (res) {
-        setTeam({ players: [], formation: team.formation });
+        applyTeamPayload(res);
+        setNewSquadName("");
+        setSquadMessage(`Created ${name}.`);
       }
     } catch (e) {
       console.warn("Failed to create new squad", e);
+      setSquadMessage(e.message || "Failed to create squad.");
+    }
+  }
+
+  async function handleSwitchSquad(squadId) {
+    try {
+      const res = await switchSquad(squadId);
+      if (res) {
+        applyTeamPayload(res);
+        setSquadMessage("");
+      }
+    } catch (e) {
+      console.warn("Failed to switch squad", e);
+      setSquadMessage(e.message || "Failed to switch squad.");
+    }
+  }
+
+  async function handleSaveSquadName() {
+    try {
+      const updated = await updateTeam({
+        squad_id: currentSquadId,
+        squad_name: squadName,
+        players: team.players,
+        formation: team.formation,
+      });
+      if (updated) {
+        applyTeamPayload(updated);
+        setSquadMessage("Squad name saved.");
+      }
+    } catch (e) {
+      console.warn("Failed to save squad name", e);
+      setSquadMessage(e.message || "Failed to save squad name.");
     }
   }
 
   function openPlayerSelector(slotIndex) {
     setSelectedSlotIndex(slotIndex);
     setShowPlayerList(true);
+  }
+
+  async function handleAutoOptimize() {
+    try {
+      const suggestions = await getMyTeamSuggestions();
+      setStrategy(suggestions);
+    } catch (e) {
+      console.warn("Failed to load AI strategy", e);
+    }
   }
 
   return (
@@ -170,7 +256,7 @@ export default function TeamsPage() {
           <div className="hidden md:flex items-center gap-2">
             <input
               className="px-3 py-2 rounded-md border"
-              placeholder="Filter players"
+              placeholder="Filter bought players"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
@@ -289,17 +375,70 @@ export default function TeamsPage() {
             className="card p-6"
           >
             <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+              <Users className="h-5 w-5 text-primary" />
+              Squads
+            </h3>
+            <div className="space-y-3">
+              <select
+                className="w-full px-3 py-2 rounded-md border border-border bg-background"
+                value={currentSquadId}
+                onChange={(e) => handleSwitchSquad(e.target.value)}
+              >
+                {squads.map((squad) => (
+                  <option key={squad.id} value={squad.id}>
+                    {squad.name}
+                  </option>
+                ))}
+              </select>
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 px-3 py-2 rounded-md border border-border bg-background"
+                  value={squadName}
+                  onChange={(e) => setSquadName(e.target.value)}
+                  placeholder="Squad name"
+                />
+                <button
+                  onClick={handleSaveSquadName}
+                  className="px-3 py-2 rounded-lg border border-primary/50 text-primary text-xs font-bold hover:bg-primary/5"
+                >
+                  Save
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 px-3 py-2 rounded-md border border-border bg-background"
+                  value={newSquadName}
+                  onChange={(e) => setNewSquadName(e.target.value)}
+                  placeholder="New squad name"
+                />
+                <button
+                  onClick={handleNewSquad}
+                  className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-bold"
+                >
+                  Create
+                </button>
+              </div>
+              {squadMessage ? <p className="text-xs text-muted-foreground">{squadMessage}</p> : null}
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="card p-6"
+          >
+            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
               <Zap className="h-5 w-5 text-primary" />
               Squad Intel
             </h3>
             <div className="space-y-4">
               <div className="flex justify-between items-center p-3 rounded-xl bg-muted/30 border border-border">
                 <span className="text-sm text-muted-foreground font-medium">Budget Remaining</span>
-                <span className="font-bold">£{(team.budget / 1000000).toFixed(1)}m</span>
+                <span className="font-bold">EUR {(team.budget / 1000000).toFixed(1)}m</span>
               </div>
               <div className="flex justify-between items-center p-3 rounded-xl bg-muted/30 border border-border">
-                <span className="text-sm text-muted-foreground font-medium">Free Transfers</span>
-                <span className="font-bold text-green-500">2</span>
+                <span className="text-sm text-muted-foreground font-medium">Bought Players</span>
+                <span className="font-bold text-green-500">{team.owned_count || ownedPlayers.length}/{team.max_players || 15}</span>
               </div>
               <div className="flex justify-between items-center p-3 rounded-xl bg-muted/30 border border-border">
                 <span className="text-sm text-muted-foreground font-medium">Current Formation</span>
@@ -338,7 +477,10 @@ export default function TeamsPage() {
               </div>
             </div>
 
-            <button className="w-full mt-6 py-3 rounded-xl border border-primary text-primary font-bold text-sm hover:bg-primary/10 transition-colors flex items-center justify-center gap-2">
+            <button
+              onClick={handleAutoOptimize}
+              className="w-full mt-6 py-3 rounded-xl border border-primary text-primary font-bold text-sm hover:bg-primary/10 transition-colors flex items-center justify-center gap-2"
+            >
               <ArrowRightLeft className="h-4 w-4" />
               Auto-Optimize Squad
             </button>
@@ -357,21 +499,21 @@ export default function TeamsPage() {
               {team.players && team.players.length > 0 ? (
                 <>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    Your current squad is weighted towards defensive stability. AI suggests
-                    targeting offensive assets for the upcoming Burnley (H) fixture.
+                    {strategy?.formation_insight ||
+                      "Your current squad is weighted towards defensive stability. AI suggests targeting offensive assets for upcoming fixtures."}
                   </p>
                   <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
                     <div className="h-full bg-primary w-[65%]" />
                   </div>
                   <p className="text-[10px] text-right text-muted-foreground font-bold uppercase tracking-wider">
-                    Aggression Index: 65%
+                    Confidence: {Math.round((strategy?.confidence_scores?.formation || 0.65) * 100)}%
                   </p>
                 </>
               ) : (
                 <div className="text-xs text-muted-foreground p-3 bg-muted/30 rounded border border-border/50">
-                  <p className="font-semibold text-primary mb-1">No players in squad</p>
+                  <p className="font-semibold text-primary mb-1">No bought players selected</p>
                   <p>
-                    Add players to your squad to receive AI strategy recommendations and transfer
+                    Buy players in the transfer market to receive AI strategy recommendations and transfer
                     insights.
                   </p>
                 </div>
@@ -386,7 +528,14 @@ export default function TeamsPage() {
         <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-end">
           <div className="w-full md:w-96 h-full bg-card p-4 overflow-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold">Players</h3>
+              <div>
+                <h3 className="text-lg font-bold">Bought Players</h3>
+                {selectedSlotIndex !== null && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Selecting for: <span className="font-semibold text-primary">{getPositionForSlot(selectedSlotIndex)}</span>
+                  </p>
+                )}
+              </div>
               <button
                 onClick={() => setShowPlayerList(false)}
                 className="text-sm text-muted-foreground"
@@ -395,29 +544,42 @@ export default function TeamsPage() {
               </button>
             </div>
             <input
-              placeholder="Filter players by name"
+              placeholder="Filter bought players by name"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               className="w-full px-3 py-2 rounded-md border mb-4"
             />
             <div className="space-y-2">
-              {filteredPlayers().map((p) => (
-                <div
-                  key={p.id}
-                  className="p-2 border rounded cursor-pointer hover:bg-muted/30"
-                  onClick={() => handleSelectPlayer(p)}
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-bold">{p.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {p.position} — {p.team}
+              {filteredPlayers().length > 0 ? (
+                filteredPlayers().map((p) => (
+                  <div
+                    key={p.id}
+                    className="p-2 border rounded cursor-pointer hover:bg-muted/30"
+                    onClick={() => handleSelectPlayer(p)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-bold">{p.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {p.position} - {p.team}
+                        </div>
                       </div>
+                      <div className="text-sm text-primary">Select</div>
                     </div>
-                    <div className="text-sm text-primary">Select</div>
                   </div>
+                ))
+              ) : selectedSlotIndex !== null && getPositionForSlot(selectedSlotIndex) !== "BENCH" ? (
+                <div className="p-4 text-sm text-muted-foreground border border-dashed border-border rounded bg-muted/20">
+                  <p className="font-semibold text-yellow-600 dark:text-yellow-400 mb-2">
+                    No owned {getPositionForSlot(selectedSlotIndex)} available
+                  </p>
+                  <p>You don't have any owned {getPositionForSlot(selectedSlotIndex).toLowerCase()}s matching your filter. Buy one in the Transfer Market.</p>
                 </div>
-              ))}
+              ) : (
+                <div className="p-4 text-sm text-muted-foreground border border-dashed border-border rounded">
+                  Buy players in the Transfer Market before selecting them for your team.
+                </div>
+              )}
             </div>
           </div>
         </div>

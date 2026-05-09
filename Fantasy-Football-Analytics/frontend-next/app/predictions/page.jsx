@@ -11,7 +11,12 @@ import {
   Info,
   Zap,
 } from "lucide-react";
-import { getWeekPredictions, getMyTeamSuggestions } from "@/services/predictionService";
+import {
+  getFantasyPointsProjection,
+  getMyTeamSuggestions,
+  getPlayerPerformance,
+  getWeekPredictions,
+} from "@/services/predictionService";
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -33,18 +38,21 @@ const cardVariants = {
 export default function PredictionsPage() {
   const [weekData, setWeekData] = useState(null);
   const [teamSuggestions, setTeamSuggestions] = useState(null);
+  const [projection, setProjection] = useState(null);
+  const [playerName, setPlayerName] = useState("");
+  const [playerPerformance, setPlayerPerformance] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
 
-    Promise.all([getWeekPredictions(1, 0.5), getMyTeamSuggestions()])
-      .then(([week, suggestions]) => {
+    Promise.all([getWeekPredictions(1, 0.5), getMyTeamSuggestions(), getFantasyPointsProjection()])
+      .then(([week, suggestions, points]) => {
         if (mounted) {
           setWeekData(week);
           setTeamSuggestions(suggestions);
+          setProjection(points);
           setLoading(false);
         }
       })
@@ -59,6 +67,21 @@ export default function PredictionsPage() {
       mounted = false;
     };
   }, []);
+
+  async function analyzePlayer(event) {
+    event.preventDefault();
+    if (!playerName.trim()) return;
+    try {
+      const data = await getPlayerPerformance(playerName.trim());
+      setPlayerPerformance(data);
+    } catch (err) {
+      setError(err.message || "Failed to analyze player.");
+    }
+  }
+
+  const transferSuggestions = Array.isArray(teamSuggestions?.transfer_suggestions)
+    ? teamSuggestions.transfer_suggestions
+    : [];
 
   return (
     <div className="container mx-auto p-6 md:p-10 max-w-7xl">
@@ -139,7 +162,9 @@ export default function PredictionsPage() {
                       <p className="text-xs text-muted-foreground mb-1 uppercase font-semibold">
                         Avg. Projected
                       </p>
-                      <p className="text-2xl font-bold text-primary">54.2</p>
+                      <p className="text-2xl font-bold text-primary">
+                        {projection?.projected_points ?? "0.0"}
+                      </p>
                     </div>
                     <div className="p-4 rounded-xl border border-border bg-muted/10">
                       <p className="text-xs text-muted-foreground mb-1 uppercase font-semibold">
@@ -153,8 +178,8 @@ export default function PredictionsPage() {
                     <div className="flex items-start gap-3">
                       <Info className="h-5 w-5 text-primary mt-0.5" />
                       <p className="text-sm leading-relaxed">
-                        Model predicts a high-scoring gameweek for midfielders. Consider
-                        prioritizing attacking assets from top-tier teams.
+                        {teamSuggestions?.formation_insight ||
+                          "Model is ready to analyze your squad once players are selected."}
                       </p>
                     </div>
                   </div>
@@ -175,7 +200,7 @@ export default function PredictionsPage() {
             </h2>
 
             <div className="bg-card border border-border rounded-2xl p-6 shadow-sm flex flex-col h-full">
-              {teamSuggestions && Array.isArray(teamSuggestions) && teamSuggestions.length > 0 ? (
+              {transferSuggestions.length > 0 ? (
                 <div className="flex-1 space-y-4">
                   <div className="flex items-center justify-between mb-2">
                     <p className="text-sm font-medium text-muted-foreground">
@@ -187,7 +212,7 @@ export default function PredictionsPage() {
                   </div>
 
                   <div className="space-y-3">
-                    {teamSuggestions.slice(0, 3).map((suggestion, i) => (
+                    {transferSuggestions.slice(0, 3).map((suggestion, i) => (
                       <div
                         key={i}
                         className="flex items-center justify-between p-3 rounded-xl border border-border hover:border-primary/50 transition-colors cursor-pointer group"
@@ -197,7 +222,7 @@ export default function PredictionsPage() {
                             <TrendingUp className="h-4 w-4 rotate-180" />
                           </div>
                           <span className="font-semibold text-sm">
-                            {suggestion.out || "Player Out"}
+                            {suggestion.player_out || "Player Out"}
                           </span>
                         </div>
                         <div className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors">
@@ -205,7 +230,7 @@ export default function PredictionsPage() {
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="font-semibold text-sm">
-                            {suggestion.in || "Target In"}
+                            {suggestion.player_in || "Target In"}
                           </span>
                           <div className="h-8 w-8 rounded-lg bg-green-500/10 flex items-center justify-center text-green-500">
                             <TrendingUp className="h-4 w-4" />
@@ -240,6 +265,38 @@ export default function PredictionsPage() {
           </motion.div>
         </motion.div>
       )}
+
+      <div className="mt-8 card p-6">
+        <h2 className="text-xl font-bold flex items-center gap-2 mb-4">
+          <TrendingUp className="h-5 w-5 text-primary" />
+          Player Performance Analysis
+        </h2>
+        <form onSubmit={analyzePlayer} className="flex flex-col md:flex-row gap-3">
+          <input
+            className="flex-1 px-4 py-2 rounded-md bg-input border border-border text-foreground"
+            placeholder="Enter player name"
+            value={playerName}
+            onChange={(e) => setPlayerName(e.target.value)}
+          />
+          <button className="btn-primary" type="submit">Analyze</button>
+        </form>
+        {playerPerformance ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+            <div className="p-4 rounded-xl border border-border bg-muted/10">
+              <p className="text-xs text-muted-foreground uppercase font-semibold">Expected Goals</p>
+              <p className="text-2xl font-bold text-primary">{playerPerformance.expected_goals}</p>
+            </div>
+            <div className="p-4 rounded-xl border border-border bg-muted/10">
+              <p className="text-xs text-muted-foreground uppercase font-semibold">Expected Assists</p>
+              <p className="text-2xl font-bold text-primary">{playerPerformance.expected_assists}</p>
+            </div>
+            <div className="p-4 rounded-xl border border-border bg-muted/10">
+              <p className="text-xs text-muted-foreground uppercase font-semibold">Confidence</p>
+              <p className="text-2xl font-bold text-primary">{Math.round((playerPerformance.confidence || 0) * 100)}%</p>
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       {/* Raw Data Toggle (for debugging) */}
       <motion.div variants={cardVariants} className="mt-12 pt-8 border-t border-border">

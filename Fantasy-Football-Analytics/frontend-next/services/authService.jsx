@@ -82,3 +82,11 @@ export function requestSignupCode(payload) {
 export function verify2FA(payload) {
   return apiPost("/api/auth/2fa/verify/", payload);
 }
+
+export function requestPasswordReset(payload) {
+  return apiPost("/api/auth/password-reset/request/", payload);
+}
+
+export function confirmPasswordReset(payload) {
+  return apiPost("/api/auth/password-reset/confirm/", payload);
+}

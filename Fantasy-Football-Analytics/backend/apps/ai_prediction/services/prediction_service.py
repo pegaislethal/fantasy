@@ -19,9 +19,10 @@ class PredictionService:
         if cached and cached.expires_at > timezone.now():
             return {'from_cache': True, **cached.payload}
 
-        matches = fetch_pl_matches(limit=80, status='SCHEDULED')
+        matches = fetch_pl_matches(limit=None, status='SCHEDULED')
+        target_matches = [match for match in matches if match.get('matchday') == matchweek] or matches[:10]
         predictions = []
-        for match in matches:
+        for match in target_matches:
             area = (match.get('score') or {}).get('fullTime')
             if area:
                 continue

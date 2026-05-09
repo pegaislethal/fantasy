@@ -1,11 +1,33 @@
 "use client";
 
-import { createContext, useContext, useMemo, useState, useEffect } from "react";
+import { createContext, useContext, useMemo, useState, useEffect, useRef } from "react";
 
 const AuthContext = createContext(null);
 
+// Inactivity timeout in milliseconds (15 minutes)
+const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
+  const inactivityTimerRef = useRef(null);
+  const lastActivityRef = useRef(Date.now());
+
+  // Function to reset inactivity timer
+  const resetInactivityTimer = useRef((logout) => {
+    // Clear existing timer
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+    }
+
+    // Update last activity time
+    lastActivityRef.current = Date.now();
+
+    // Set new timer
+    inactivityTimerRef.current = setTimeout(() => {
+      console.warn("User inactive for 15 minutes. Logging out...");
+      logout();
+    }, INACTIVITY_TIMEOUT);
+  });
 
   useEffect(() => {
     // On mount, load auth state from localStorage if present
@@ -41,6 +63,9 @@ export function AuthProvider({ children }) {
     const handleStorageChange = (e) => {
       if (e.key === "ff_access" && !e.newValue) {
         setUser(null);
+        if (inactivityTimerRef.current) {
+          clearTimeout(inactivityTimerRef.current);
+        }
       }
     };
     window.addEventListener("storage", handleStorageChange);
@@ -51,6 +76,9 @@ export function AuthProvider({ children }) {
     return () => {
       window.removeEventListener("storage", handleStorageChange);
       clearInterval(interval);
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
     };
   }, [user]);
 
@@ -64,6 +92,11 @@ export function AuthProvider({ children }) {
         document.cookie = "ff_refresh=; Path=/; Max-Age=0;";
         document.cookie = "ff_role=; Path=/; Max-Age=0;";
         
+        // Clear inactivity timer
+        if (inactivityTimerRef.current) {
+          clearTimeout(inactivityTimerRef.current);
+        }
+
         // Clear state
         setUser(null);
 
@@ -75,6 +108,35 @@ export function AuthProvider({ children }) {
       setUser(null);
     }
   };
+
+  // Set up inactivity timer when user logs in
+  useEffect(() => {
+    if (user && typeof window !== "undefined") {
+      resetInactivityTimer.current(logout);
+
+      // Activity event listeners
+      const activityEvents = ["mousemove", "keypress", "click", "touchstart", "wheel", "scroll"];
+
+      const handleActivity = () => {
+        resetInactivityTimer.current(logout);
+      };
+
+      // Add event listeners
+      activityEvents.forEach((event) => {
+        window.addEventListener(event, handleActivity);
+      });
+
+      // Cleanup
+      return () => {
+        activityEvents.forEach((event) => {
+          window.removeEventListener(event, handleActivity);
+        });
+        if (inactivityTimerRef.current) {
+          clearTimeout(inactivityTimerRef.current);
+        }
+      };
+    }
+  }, [user]);
 
   const value = useMemo(
     () => ({

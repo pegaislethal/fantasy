@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Activity, TrendingUp, Trophy, Star, Users } from "lucide-react";
-import { getDashboard } from "@/services/leaderboardService";
+import { Activity, Bell, TrendingUp, Trophy, Users } from "lucide-react";
+import { getDashboard, getNotifications } from "@/services/leaderboardService";
+import { getTopAttackers } from "@/services/footballApiService";
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -24,15 +25,19 @@ const itemVariants = {
 
 export default function DashboardPage() {
   const [data, setData] = useState(null);
+  const [notifications, setNotifications] = useState([]);
+  const [topAttackers, setTopAttackers] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
-    getDashboard()
-      .then((payload) => {
+    Promise.all([getDashboard(), getNotifications(), getTopAttackers().catch(() => [])])
+      .then(([payload, alerts, attackers]) => {
         if (mounted) {
           setData(payload);
+          setNotifications(alerts || []);
+          setTopAttackers(attackers || []);
           setLoading(false);
         }
       })
@@ -74,12 +79,20 @@ export default function DashboardPage() {
   }
 
   // Clean, structured data handling from backend
+  const pointsHistory = data?.points_history?.length
+    ? data.points_history
+    : [
+        { week: "MW 1", points: data?.points || 0 },
+        { week: "MW 2", points: data?.points || 0 },
+      ];
+  const maxPoints = Math.max(...pointsHistory.map((item) => Number(item.points) || 0), 1);
+
   const stats = [
     { label: "Total Points", value: data?.points || "0", icon: Trophy, color: "text-yellow-500" },
     { label: "Global Rank", value: data?.rank || "N/A", icon: TrendingUp, color: "text-primary" },
     {
       label: "Budget Remaining",
-      value: data?.budget ? `£${(data.budget / 1000000).toFixed(1)}m` : "£100.0m",
+      value: data?.budget ? `EUR ${(data.budget / 1000000).toFixed(1)}m` : "EUR 50.0m",
       icon: Activity,
       color: "text-green-500",
     },
@@ -104,7 +117,7 @@ export default function DashboardPage() {
             Manager Dashboard
           </motion.h1>
           <motion.p variants={itemVariants} className="text-muted-foreground mt-1">
-            Overview of your team's performance and analytics.
+            Overview of your team&apos;s performance and analytics.
           </motion.p>
         </div>
 
@@ -137,11 +150,30 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-xl font-bold flex items-center">
                 <TrendingUp className="mr-2 h-5 w-5 text-primary" />
-                Performance Graph
+                Top Attacking Players
               </h3>
             </div>
-            <div className="h-64 flex items-center justify-center bg-muted/20 rounded-lg border border-dashed border-border">
-              <p className="text-muted-foreground">Chart Visualization Data Pending</p>
+            <div className="space-y-3">
+              {topAttackers.slice(0, 5).map((player) => {
+                const maxGoals = Math.max(...topAttackers.map((item) => Number(item.goals) || 0), 1);
+                return (
+                  <div key={player.name} className="flex items-center gap-3">
+                    <span className="w-36 text-sm font-bold truncate">{player.name}</span>
+                    <div className="flex-1 h-7 bg-muted/50 rounded relative overflow-hidden">
+                      <div
+                        className="h-full bg-primary transition-all duration-500"
+                        style={{ width: `${Math.max(8, (Number(player.goals || 0) / maxGoals) * 100)}%` }}
+                      />
+                    </div>
+                    <span className="w-10 text-right font-bold text-primary">{player.goals}</span>
+                  </div>
+                );
+              })}
+              {topAttackers.length === 0 ? (
+                <div className="h-64 flex items-center justify-center bg-muted/20 rounded-lg border border-dashed border-border">
+                  <p className="text-muted-foreground">No attacker goal data available</p>
+                </div>
+              ) : null}
             </div>
           </div>
           <div className="card p-6">
@@ -155,18 +187,13 @@ export default function DashboardPage() {
               <div className="space-y-4">
                 {/* Simple Bar Chart */}
                 <div className="space-y-2">
-                  {[
-                    { week: "W1", points: Math.floor(Math.random() * 80) + 20 },
-                    { week: "W2", points: Math.floor(Math.random() * 80) + 20 },
-                    { week: "W3", points: Math.floor(Math.random() * 80) + 20 },
-                    { week: "W4", points: Math.floor(Math.random() * 80) + 20 },
-                  ].map((item, i) => (
+                  {pointsHistory.map((item, i) => (
                     <div key={i} className="flex items-center gap-2">
-                      <span className="text-xs font-bold w-6">{item.week}</span>
+                      <span className="text-xs font-bold w-10">{item.week}</span>
                       <div className="flex-1 h-6 bg-muted/50 rounded relative overflow-hidden">
                         <div
                           className="h-full bg-linear-to-r from-primary to-primary/70 transition-all duration-500"
-                          style={{ width: `${(item.points / 100) * 100}%` }}
+                          style={{ width: `${Math.max(8, (Number(item.points || 0) / maxPoints) * 100)}%` }}
                         />
                       </div>
                       <span className="text-xs font-bold text-right w-8">{item.points}</span>
@@ -204,6 +231,20 @@ export default function DashboardPage() {
                 <span className="text-muted-foreground">Transfers Left</span>
                 <span className="font-bold text-green-500">{data?.transfers_left || 0}</span>
               </div>
+            </div>
+          </div>
+          <div className="card p-6">
+            <h3 className="text-xl font-bold flex items-center mb-6">
+              <Bell className="mr-2 h-5 w-5 text-primary" />
+              Alerts
+            </h3>
+            <div className="space-y-3 text-sm">
+              {notifications.slice(0, 4).map((alert) => (
+                <div key={alert.id} className="p-3 rounded border border-border/30">
+                  <p className="font-medium">{alert.message}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{alert.type}</p>
+                </div>
+              ))}
             </div>
           </div>
         </motion.div>

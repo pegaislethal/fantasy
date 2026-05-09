@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { LayoutDashboard, Users, Trophy, BrainCircuit, LogOut, Menu, User, Calendar, ArrowRightLeft } from "lucide-react";
+import { LayoutDashboard, Users, Trophy, BrainCircuit, LogOut, Menu, User, Calendar, ArrowRightLeft, ShieldCheck } from "lucide-react";
 import { APP_ROUTES } from "@/utils/constants";
 import { useAuth } from "@/context/AuthContext";
 
@@ -14,6 +14,10 @@ const links = [
   { href: APP_ROUTES.matches, label: "Matches", icon: Calendar },
   { href: APP_ROUTES.leaderboard, label: "Leaderboard", icon: Trophy },
   { href: APP_ROUTES.predictions, label: "AI Predictions", icon: BrainCircuit },
+];
+
+const adminLinks = [
+  { href: "/admin/dashboard", label: "Admin", icon: ShieldCheck },
 ];
 
 export default function Navbar() {
@@ -42,7 +46,7 @@ export default function Navbar() {
 
         <div className="flex flex-1 items-center justify-between space-x-2 md:justify-end">
           <nav className="hidden md:flex items-center space-x-6 text-sm font-medium">
-            {links
+            {[...links, ...(user?.role === "admin" ? adminLinks : [])]
               .filter((item) => {
                 if (isAuthenticated) return true;
                 // Hide protected routes if not authenticated

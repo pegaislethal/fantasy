@@ -49,7 +49,10 @@ def fetch_pl_matches(limit=20, status=None):
     if status:
         query['status'] = status
     data = fetch_json('/competitions/PL/matches', query)
-    return data.get('matches', [])[:limit]
+    matches = data.get('matches', [])
+    if limit is None:
+        return matches
+    return matches[:limit]
 
 
 def fetch_pl_teams():

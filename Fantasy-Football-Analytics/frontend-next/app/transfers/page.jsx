@@ -5,27 +5,35 @@ import { useEffect, useState } from "react";
 import { 
   ArrowRightLeft, 
   Search, 
-  Filter, 
   TrendingUp, 
-  TrendingDown, 
   DollarSign, 
   Users, 
   AlertCircle,
   CheckCircle2,
+  Star,
   X
 } from "lucide-react";
-import { getTransferMarket, submitTransfer } from "@/services/transferService";
+import {
+  addToWatchlist,
+  getTransferHistory,
+  getTransferMarket,
+  getWatchlist,
+  removeFromWatchlist,
+  submitTransfer,
+} from "@/services/transferService";
 import { getMyTeam } from "@/services/teamService";
 import ProtectedRoute from "@/components/ProtectedRoute";
 
 export default function TransfersPage() {
   const [marketPlayers, setMarketPlayers] = useState([]);
-  const [myTeam, setMyTeam] = useState({ players: [], budget: 100000000 });
+  const [myTeam, setMyTeam] = useState({ players: [], budget: 50000000, owned_count: 0, max_players: 15 });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [posFilter, setPosFilter] = useState("All");
   const [status, setStatus] = useState({ type: null, message: "" });
   const [pendingTransfer, setPendingTransfer] = useState(null); // { out: player, in: player }
+  const [watchlist, setWatchlist] = useState([]);
+  const [history, setHistory] = useState([]);
 
   useEffect(() => {
     loadData();
@@ -34,20 +42,61 @@ export default function TransfersPage() {
   async function loadData() {
     setLoading(true);
     try {
-      const [market, team] = await Promise.all([getTransferMarket(), getMyTeam()]);
+      const [market, team, watch, transferHistory] = await Promise.all([
+        getTransferMarket(),
+        getMyTeam(),
+        getWatchlist(),
+        getTransferHistory(),
+      ]);
+      const ownedPlayers = team?.owned_players || team?.players || [];
+      const nextTeam = {
+        ...(team || {}),
+        players: ownedPlayers,
+        budget: team?.budget ?? 50000000,
+        owned_count: team?.owned_count ?? ownedPlayers.filter(Boolean).length,
+        max_players: team?.max_players ?? 15,
+      };
       setMarketPlayers(market || []);
-      setMyTeam(team || { players: [], budget: 100000000 });
+      setMyTeam(nextTeam);
+      setWatchlist(watch || []);
+      setHistory(transferHistory || []);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("ff_transfer_state", JSON.stringify({ market, team: nextTeam, watch, transferHistory }));
+      }
     } catch (e) {
       console.error("Load failed", e);
+      try {
+        const fallback = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("ff_transfer_state") || "{}") : {};
+        if (fallback.team) {
+          setMarketPlayers(fallback.market || []);
+          setMyTeam(fallback.team);
+          setWatchlist(fallback.watch || []);
+          setHistory(fallback.transferHistory || []);
+          setStatus({ type: "error", message: "Backend unavailable. Showing last saved transfer state." });
+          return;
+        }
+      } catch (storageError) {
+        console.warn("No transfer fallback available", storageError);
+      }
       setStatus({ type: "error", message: "Failed to load market data." });
     } finally {
       setLoading(false);
     }
   }
 
+  async function toggleWatchlist(player) {
+    try {
+      const isWatched = watchlist.some((item) => String(item.id) === String(player.id));
+      const updated = isWatched ? await removeFromWatchlist(player.id) : await addToWatchlist(player);
+      setWatchlist(updated || []);
+    } catch (e) {
+      setStatus({ type: "error", message: e.message || "Failed to update watchlist." });
+    }
+  }
+
   const filteredMarket = marketPlayers.filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase()) || 
-                         p.team.toLowerCase().includes(search.toLowerCase());
+    const matchesSearch = (p.name || "").toLowerCase().includes(search.toLowerCase()) || 
+                         (p.team || "").toLowerCase().includes(search.toLowerCase());
     const matchesPos = posFilter === "All" || p.position === posFilter;
     return matchesSearch && matchesPos;
   });
@@ -56,6 +105,7 @@ export default function TransfersPage() {
     try {
       const payload = {
         mode,
+        outId: outPlayer?.id,
         outName: outPlayer?.name,
         inName: inPlayer?.name,
         playerIn: inPlayer
@@ -72,13 +122,24 @@ export default function TransfersPage() {
 
   const formatCurrency = (val) => {
     const num = parseFloat(val);
-    return new Intl.NumberFormat('en-GB', {
+    return new Intl.NumberFormat('en-IE', {
       style: 'currency',
-      currency: 'GBP',
+      currency: 'EUR',
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(num);
   };
+
+  const ownedPlayerIds = new Set((myTeam.players || []).filter(Boolean).map((p) => String(p.id)));
+  const ownedCount = myTeam.owned_count ?? (myTeam.players || []).filter(Boolean).length;
+  const maxPlayers = myTeam.max_players || 15;
+
+  function getBuyBlockReason(player) {
+    if (ownedPlayerIds.has(String(player.id)) || player.is_owned) return "Owned";
+    if (ownedCount >= maxPlayers) return "Limit";
+    if (Number(myTeam.budget || 0) < Number(player.value || 0)) return "Insufficient funds";
+    return "";
+  }
 
   return (
     <ProtectedRoute>
@@ -102,6 +163,7 @@ export default function TransfersPage() {
           <div className="card px-6 py-4 flex flex-col items-end border-primary/20 bg-primary/5">
             <span className="text-xs font-bold uppercase tracking-widest text-primary/60">Remaining Budget</span>
             <span className="text-2xl font-black text-primary">{formatCurrency(myTeam.budget)}</span>
+            <span className="text-xs text-muted-foreground mt-1">{ownedCount}/{maxPlayers} players owned</span>
           </div>
         </div>
       </motion.div>
@@ -187,11 +249,29 @@ export default function TransfersPage() {
                         {formatCurrency(player.value)}
                       </td>
                       <td className="px-4 py-4 text-right">
-                        <button 
-                          onClick={() => setPendingTransfer({ in: player })}
-                          className="px-4 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground transition-all text-xs font-black uppercase"
+                        <button
+                          onClick={() => toggleWatchlist(player)}
+                          className="mr-2 p-2 rounded-lg border border-border hover:bg-muted"
+                          aria-label="Toggle watchlist"
                         >
-                          Buy
+                          <Star
+                            className={`h-4 w-4 ${
+                              watchlist.some((item) => String(item.id) === String(player.id))
+                                ? "fill-primary text-primary"
+                                : "text-muted-foreground"
+                            }`}
+                          />
+                        </button>
+                        <button
+                          disabled={Boolean(getBuyBlockReason(player))}
+                          onClick={() => setPendingTransfer({ in: player })}
+                          className={`px-4 py-1.5 rounded-lg transition-all text-xs font-black uppercase ${
+                            getBuyBlockReason(player)
+                              ? "bg-muted text-muted-foreground cursor-not-allowed"
+                              : "bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground"
+                          }`}
+                        >
+                          {getBuyBlockReason(player) || "Buy"}
                         </button>
                       </td>
                     </motion.tr>
@@ -212,7 +292,7 @@ export default function TransfersPage() {
           <div className="card p-6 border-primary/10 shadow-xl shadow-primary/5">
             <h3 className="text-xl font-black mb-6 flex items-center gap-2">
               <Users className="h-6 w-6 text-primary" />
-              Your Current Squad
+              Owned Players
             </h3>
             <div className="space-y-3">
               {myTeam.players && myTeam.players.length > 0 ? (
@@ -221,7 +301,7 @@ export default function TransfersPage() {
                     <div>
                       <div className="font-bold text-sm">{p.name}</div>
                       <div className="text-[10px] text-muted-foreground uppercase font-bold tracking-tighter">
-                        {p.position} — {p.team}
+                        {p.position} - {p.team}
                       </div>
                     </div>
                     <button 
@@ -263,6 +343,33 @@ export default function TransfersPage() {
               </div>
             </div>
           </div>
+
+          <div className="card p-6">
+            <h3 className="font-bold text-sm uppercase tracking-widest text-muted-foreground mb-4">Watchlist</h3>
+            <div className="space-y-2">
+              {watchlist.slice(0, 5).map((player) => (
+                <div key={player.id} className="flex items-center justify-between p-2 rounded border border-border">
+                  <span className="text-sm font-bold">{player.name}</span>
+                  <button onClick={() => toggleWatchlist(player)} className="text-xs text-primary">Remove</button>
+                </div>
+              ))}
+              {watchlist.length === 0 ? <p className="text-sm text-muted-foreground">No favorite players yet.</p> : null}
+            </div>
+          </div>
+
+          <div className="card p-6">
+            <h3 className="font-bold text-sm uppercase tracking-widest text-muted-foreground mb-4">Transfer History</h3>
+            <div className="space-y-2">
+              {history.slice(0, 5).map((record) => (
+                <div key={record.id} className="p-2 rounded border border-border text-xs">
+                  <span className="font-bold">{record.player_out}</span>
+                  <span className="text-muted-foreground"> to </span>
+                  <span className="font-bold text-primary">{record.player_in}</span>
+                </div>
+              ))}
+              {history.length === 0 ? <p className="text-sm text-muted-foreground">No transfers recorded yet.</p> : null}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -301,9 +408,14 @@ export default function TransfersPage() {
                 </button>
                 <button 
                   onClick={() => handleTransfer("buy", null, pendingTransfer.in)}
-                  className="flex-1 py-4 rounded-2xl bg-primary text-primary-foreground font-black hover:opacity-90 transition-all shadow-lg shadow-primary/20"
+                  disabled={Boolean(getBuyBlockReason(pendingTransfer.in))}
+                  className={`flex-1 py-4 rounded-2xl font-black transition-all shadow-lg shadow-primary/20 ${
+                    getBuyBlockReason(pendingTransfer.in)
+                      ? "bg-muted text-muted-foreground cursor-not-allowed"
+                      : "bg-primary text-primary-foreground hover:opacity-90"
+                  }`}
                 >
-                  Confirm Buy
+                  {getBuyBlockReason(pendingTransfer.in) || "Confirm Buy"}
                 </button>
               </div>
             </div>

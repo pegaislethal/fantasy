@@ -33,13 +33,19 @@ class AdminProfile(models.Model):
 
 class UserTeam(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='team')
-    # Upgraded budget to max_digits 12 to support $100,000,000.00 exact amounts
-    budget = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('100000000.00'))
+    budget = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('50000000.00'))
     free_transfers = models.PositiveIntegerField(default=1)
-    players = models.JSONField(default=list, blank=True) # { "squad": [{ "id": 1, "position": "GK", "is_bench": false }] }
+    players = models.JSONField(default=list, blank=True) # Bought/owned players.
+    selected_players = models.JSONField(default=list, blank=True) # Lineup slots selected from owned players.
+    squads = models.JSONField(default=list, blank=True) # Named squad layouts.
+    active_squad_id = models.CharField(max_length=64, blank=True, default='default')
     formation = models.CharField(max_length=20, default='4-4-2')
     points = models.PositiveIntegerField(default=0) # Total points accumulated
+    weekly_points = models.JSONField(default=dict, blank=True) # { "1": 12, "2": 9 }
     processed_matchweeks = models.JSONField(default=list, blank=True) # [1, 2, 3, ...]
+    rewards = models.JSONField(default=list, blank=True) # [{ "matchweek": 1, "reward": 15000000 }]
+    watchlist = models.JSONField(default=list, blank=True) # [{ "id": 1, "name": "Player" }]
+    notifications = models.JSONField(default=list, blank=True) # lightweight user alerts
     rank = models.CharField(max_length=50, default='-')
     last_synced_at = models.DateTimeField(null=True, blank=True)
 

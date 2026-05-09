@@ -4,6 +4,7 @@ export const APP_ROUTES = {
   home: "/",
   login: "/login",
   signup: "/signup",
+  resetPassword: "/reset-password",
   dashboard: "/dashboard",
   profile: "/profile",
   leaderboard: "/leaderboard",

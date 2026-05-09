@@ -3,7 +3,8 @@
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { Calendar, Clock, Trophy, ChevronRight, Filter, AlertCircle } from "lucide-react";
-import { getMatches } from "@/services/footballApiService";
+import { getLiveScores, getMatchDifficulty, getMatches } from "@/services/footballApiService";
+import { syncPoints } from "@/services/leaderboardService";
 import ProtectedRoute from "@/components/ProtectedRoute";
 
 export default function MatchesPage() {
@@ -11,11 +12,17 @@ export default function MatchesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("all"); // all, finished, scheduled
+  const [liveScores, setLiveScores] = useState([]);
+  const [difficulty, setDifficulty] = useState([]);
 
   useEffect(() => {
-    getMatches()
-      .then((data) => {
+    let mounted = true;
+    Promise.all([getMatches(), getLiveScores(), getMatchDifficulty()])
+      .then(([data, live, difficultyData]) => {
+        if (!mounted) return;
         setMatches(data || []);
+        setLiveScores(live || []);
+        setDifficulty(difficultyData || []);
         setLoading(false);
       })
       .catch((err) => {
@@ -23,6 +30,18 @@ export default function MatchesPage() {
         setError("Unable to load match data. Please try again later.");
         setLoading(false);
       });
+    const interval = setInterval(() => {
+      Promise.all([getLiveScores(), getMatches(), syncPoints()])
+        .then(([live, latestMatches]) => {
+          setLiveScores(live || []);
+          setMatches(latestMatches || []);
+        })
+        .catch(() => {});
+    }, 30000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   const filteredMatches = matches.filter((m) => {
@@ -83,6 +102,10 @@ export default function MatchesPage() {
           <Filter className="h-4 w-4" />
           <span>Showing {filteredMatches.length} matches</span>
         </div>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/30 px-4 py-2 rounded-lg border border-border">
+          <Clock className="h-4 w-4 text-primary" />
+          <span>{liveScores.length} live</span>
+        </div>
       </div>
 
       {loading ? (
@@ -104,6 +127,22 @@ export default function MatchesPage() {
         </div>
       ) : (
         <div className="grid gap-6">
+          {activeTab === "scheduled" && difficulty.length > 0 ? (
+            <div className="card p-6">
+              <h2 className="text-xl font-bold mb-4">Upcoming Match Difficulty</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {difficulty.slice(0, 6).map((match) => (
+                  <div key={match.id} className="flex items-center justify-between p-3 rounded-lg border border-border">
+                    <div>
+                      <p className="font-bold text-sm">{match.home_team} vs {match.away_team}</p>
+                      <p className="text-xs text-muted-foreground">Matchweek {match.matchday || "-"}</p>
+                    </div>
+                    <span className="text-xs font-bold text-primary">{match.difficulty_label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {filteredMatches.length > 0 ? (
             filteredMatches.map((match, idx) => (
               <motion.div

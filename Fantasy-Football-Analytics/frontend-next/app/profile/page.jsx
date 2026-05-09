@@ -2,28 +2,33 @@
 
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { updateProfile } from "@/services/accountService";
+import { changePassword, updateProfile } from "@/services/accountService";
 
 export default function ProfilePage() {
   const { user, setAuthenticatedUser } = useAuth();
   const [form, setForm] = useState({ username: "", email: "" });
   const [loading, setLoading] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
+    let nextForm = null;
     if (user) {
-      setForm({ username: user.username || "", email: user.email || "" });
+      nextForm = { username: user.username || "", email: user.email || "" };
     } else if (typeof window !== "undefined") {
       try {
         const stored = localStorage.getItem("ff_user");
         if (stored) {
           const parsed = JSON.parse(stored);
-          setForm({ username: parsed.username || "", email: parsed.email || "" });
+          nextForm = { username: parsed.username || "", email: parsed.email || "" };
         }
       } catch (e) {
         console.warn("Failed to read user from localStorage", e);
       }
+    }
+    if (nextForm) {
+      Promise.resolve().then(() => setForm(nextForm));
     }
   }, [user]);
 
@@ -43,6 +48,22 @@ export default function ProfilePage() {
       }
     } catch (err) {
       setError(err.message || "Failed to update profile.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onPasswordSubmit(e) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      const res = await changePassword(passwordForm);
+      setPasswordForm({ currentPassword: "", newPassword: "" });
+      setMessage(res?.detail || "Password updated.");
+    } catch (err) {
+      setError(err.message || "Failed to update password.");
     } finally {
       setLoading(false);
     }
@@ -76,6 +97,30 @@ export default function ProfilePage() {
             {message && <p className="text-sm text-green-400">{message}</p>}
             {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
+        </form>
+        <form onSubmit={onPasswordSubmit} className="space-y-4 mt-6 pt-6 border-t border-border">
+          <h2 className="text-lg font-bold">Change Password</h2>
+          <div>
+            <label className="text-sm text-muted-foreground">Current Password</label>
+            <input
+              className="w-full mt-1 px-3 py-2 rounded-md border border-border"
+              type="password"
+              value={passwordForm.currentPassword}
+              onChange={(e) => setPasswordForm((p) => ({ ...p, currentPassword: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="text-sm text-muted-foreground">New Password</label>
+            <input
+              className="w-full mt-1 px-3 py-2 rounded-md border border-border"
+              type="password"
+              value={passwordForm.newPassword}
+              onChange={(e) => setPasswordForm((p) => ({ ...p, newPassword: e.target.value }))}
+            />
+          </div>
+          <button className="btn-primary" disabled={loading} type="submit">
+            {loading ? "Saving..." : "Update Password"}
+          </button>
         </form>
       </div>
     </div>

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Trophy, Medal, AlertCircle } from 'lucide-react';
-import { getLeaderboard } from '@/services/leaderboardService';
+import { getLeaderboard, getWeeklyLeaderboard } from '@/services/leaderboardService';
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -24,12 +24,14 @@ const itemVariants = {
 
 export default function LeaderboardPage() {
   const [rows, setRows] = useState([]);
+  const [activeTab, setActiveTab] = useState('global');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
-    getLeaderboard()
+    const load = activeTab === 'weekly' ? getWeeklyLeaderboard : getLeaderboard;
+    load()
       .then((data) => {
         if (mounted) {
           setRows(data || []);
@@ -45,7 +47,14 @@ export default function LeaderboardPage() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [activeTab]);
+
+  const formatReward = (value) =>
+    new Intl.NumberFormat('en-IE', {
+      style: 'currency',
+      currency: 'EUR',
+      maximumFractionDigits: 0,
+    }).format(Number(value || 0));
 
   return (
     <div className="container mx-auto p-6 md:p-10 max-w-5xl">
@@ -53,11 +62,30 @@ export default function LeaderboardPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center">
             <Trophy className="mr-3 h-8 w-8 text-primary" />
-            Global Leaderboard
+            {activeTab === 'weekly' ? 'Weekly Leaderboard' : 'Global Leaderboard'}
           </h1>
           <p className="text-muted-foreground mt-2">
             See how your team stacks up against managers worldwide.
           </p>
+        </div>
+        <div className="flex p-1 bg-muted rounded-xl">
+          {[
+            { id: 'global', label: 'Global' },
+            { id: 'weekly', label: 'Weekly' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => {
+                setLoading(true);
+                setActiveTab(tab.id);
+              }}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                activeTab === tab.id ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -82,7 +110,8 @@ export default function LeaderboardPage() {
         >
           <div className="grid grid-cols-12 gap-4 px-6 py-4 bg-muted/50 text-sm font-semibold text-muted-foreground uppercase tracking-wider rounded-t-lg">
             <div className="col-span-2 sm:col-span-1">Rank</div>
-            <div className="col-span-7 sm:col-span-8">Manager</div>
+            <div className="col-span-5 sm:col-span-6">Manager</div>
+            <div className="col-span-2 text-right">Reward</div>
             <div className="col-span-3 text-right">Points</div>
           </div>
 
@@ -109,12 +138,15 @@ export default function LeaderboardPage() {
                       {rank === 3 && <Medal className="h-5 w-5 mr-1 text-amber-600" />}
                       {rank > 3 && <span className="text-muted-foreground w-6 text-center">{rank}</span>}
                     </div>
-                    <div className="col-span-7 sm:col-span-8 font-medium">
+                    <div className="col-span-5 sm:col-span-6 font-medium">
                       {row.username}
                       {rank === 1 && <span className="ml-2 text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full">Top Scorer</span>}
                     </div>
+                    <div className="col-span-2 text-right font-bold text-green-400">
+                      {formatReward(row.reward)}
+                    </div>
                     <div className="col-span-3 text-right font-bold text-primary">
-                      {row.points}
+                      {activeTab === 'weekly' ? row.weekly_points ?? row.points : row.points}
                     </div>
                   </motion.div>
                 );

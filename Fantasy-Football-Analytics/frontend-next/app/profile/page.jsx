@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { changePassword, updateProfile } from "@/services/accountService";
+import { changePassword, updateProfile, uploadProfilePicture } from "@/services/accountService";
+import { API_BASE_URL } from "@/utils/constants";
 
 export default function ProfilePage() {
   const { user, setAuthenticatedUser } = useAuth();
@@ -11,24 +12,39 @@ export default function ProfilePage() {
   const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [profilePicture, setProfilePicture] = useState("");
+  const [pictureFile, setPictureFile] = useState(null);
+  const [pictureLoading, setPictureLoading] = useState(false);
+
+  function imageUrl(path) {
+    if (!path) return "";
+    if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:")) return path;
+    return `${API_BASE_URL}${path}`;
+  }
 
   useEffect(() => {
     let nextForm = null;
+    let nextPicture = "";
     if (user) {
       nextForm = { username: user.username || "", email: user.email || "" };
+      nextPicture = user.profile_picture || "";
     } else if (typeof window !== "undefined") {
       try {
         const stored = localStorage.getItem("ff_user");
         if (stored) {
           const parsed = JSON.parse(stored);
           nextForm = { username: parsed.username || "", email: parsed.email || "" };
+          nextPicture = parsed.profile_picture || "";
         }
       } catch (e) {
         console.warn("Failed to read user from localStorage", e);
       }
     }
     if (nextForm) {
-      Promise.resolve().then(() => setForm(nextForm));
+      Promise.resolve().then(() => {
+        setForm(nextForm);
+        setProfilePicture(nextPicture);
+      });
     }
   }, [user]);
 
@@ -69,10 +85,80 @@ export default function ProfilePage() {
     }
   }
 
+  function onPictureChange(e) {
+    const file = e.target.files?.[0];
+    setError("");
+    setMessage("");
+    if (!file) {
+      setPictureFile(null);
+      return;
+    }
+    const allowed = ["image/jpeg", "image/png", "image/webp"];
+    if (!allowed.includes(file.type)) {
+      setPictureFile(null);
+      setError("Only JPG, JPEG, PNG, and WEBP images are allowed.");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setPictureFile(null);
+      setError("Profile picture must be 2MB or smaller.");
+      return;
+    }
+    setPictureFile(file);
+  }
+
+  async function onPictureUpload(e) {
+    e.preventDefault();
+    if (!pictureFile) {
+      setError("Choose a profile picture first.");
+      return;
+    }
+    setPictureLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      const res = await uploadProfilePicture(pictureFile);
+      if (res?.user) {
+        setAuthenticatedUser(res.user);
+        localStorage.setItem("ff_user", JSON.stringify(res.user));
+        setProfilePicture(res.user.profile_picture || res.profile_picture || "");
+      }
+      setPictureFile(null);
+      setMessage(res?.detail || "Profile picture updated.");
+    } catch (err) {
+      setError(err.message || "Failed to upload profile picture.");
+    } finally {
+      setPictureLoading(false);
+    }
+  }
+
   return (
     <div className="container mx-auto p-6 md:p-10">
       <div className="card max-w-lg w-full mx-auto p-6">
         <h1 className="text-2xl font-bold mb-4">Your Profile</h1>
+        <form onSubmit={onPictureUpload} className="space-y-4 mb-6 pb-6 border-b border-border">
+          <div className="flex items-center gap-4">
+            <div className="h-20 w-20 rounded-full bg-primary text-primary-foreground flex items-center justify-center overflow-hidden font-bold text-2xl">
+              {profilePicture ? (
+                <img src={imageUrl(profilePicture)} alt="Profile" className="h-full w-full object-cover" />
+              ) : (
+                form.username?.[0]?.toUpperCase() || "U"
+              )}
+            </div>
+            <div className="flex-1">
+              <label className="text-sm text-muted-foreground">Profile Picture</label>
+              <input
+                className="w-full mt-1 px-3 py-2 rounded-md border border-border"
+                type="file"
+                accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                onChange={onPictureChange}
+              />
+            </div>
+          </div>
+          <button className="btn-primary" disabled={pictureLoading || !pictureFile} type="submit">
+            {pictureLoading ? "Uploading..." : "Upload Picture"}
+          </button>
+        </form>
         <form onSubmit={onSubmit} className="space-y-4">
           <div>
             <label className="text-sm text-muted-foreground">Username</label>

@@ -101,6 +101,36 @@ export default function Home() {
           ))}
         </motion.div>
       </motion.div>
+      <footer className="z-10 w-full max-w-5xl mt-16 pt-8 border-t border-border/50">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm text-muted-foreground">
+          <div>
+            <div className="flex items-center gap-3 text-card-foreground font-bold mb-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                F
+              </div>
+              Fantasy Football
+            </div>
+            <p>
+              AI-assisted fantasy football analytics for squads, fixtures, rankings, and smarter transfer decisions.
+            </p>
+          </div>
+          <div>
+            <h3 className="text-card-foreground font-semibold mb-2">Quick Links</h3>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              <Link href={APP_ROUTES.home} className="hover:text-foreground">Home</Link>
+              <Link href={APP_ROUTES.matches} className="hover:text-foreground">Matches</Link>
+              <Link href={APP_ROUTES.leaderboard} className="hover:text-foreground">Leaderboard</Link>
+              <Link href={APP_ROUTES.login} className="hover:text-foreground">Login</Link>
+              <Link href={APP_ROUTES.signup} className="hover:text-foreground">Signup</Link>
+            </div>
+          </div>
+          <div>
+            <h3 className="text-card-foreground font-semibold mb-2">Support</h3>
+            <p>Contact support at support@fantasyfootballanalytics.local</p>
+            <p className="mt-3">Copyright {new Date().getFullYear()} Fantasy Football Analytics Platform.</p>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

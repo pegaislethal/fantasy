@@ -1,4 +1,5 @@
 from datetime import timedelta
+import os
 import random
 import string
 import uuid
@@ -7,11 +8,13 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model, authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.core.files.storage import FileSystemStorage
 from django.db import transaction
 from django.utils import timezone
 from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework import status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -23,7 +26,7 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
 from .football_data import fetch_pl_matches, fetch_pl_scorers
-from .models import AdminProfile, TransferRecord, UserTeam, Player
+from .models import AdminMatch, AdminProfile, TransferRecord, UserTeam, Player
 from .serializers import EmailTokenObtainPairSerializer, RegisterSerializer
 
 User = get_user_model()
@@ -39,6 +42,31 @@ REWARD_BY_RANK = {
     5: Decimal('3000000.00'),
 }
 DEFAULT_REWARD = Decimal('2000000.00')
+PROFILE_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
+PROFILE_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
+PROFILE_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _profile_picture_url(user, request=None):
+    picture = getattr(user, 'profile_picture', '') or ''
+    if not picture:
+        return ''
+    if picture.startswith(('http://', 'https://')):
+        return picture
+    if request:
+        return request.build_absolute_uri(picture)
+    return picture
+
+
+def _user_payload(user, request=None):
+    return {
+        'id': str(user.pk),
+        'username': user.username,
+        'email': user.email,
+        'role': 'admin' if user.is_staff else 'user',
+        'is_staff': user.is_staff,
+        'profile_picture': _profile_picture_url(user, request),
+    }
 
 
 def _player_payload(player):
@@ -144,6 +172,7 @@ def _sync_team_from_squad(team, squad):
 def _validate_selected_players(players, owned_players):
     owned_ids = _owned_player_ids(owned_players)
     selected_players = []
+    seen_ids = set()
 
     for player in players or []:
         if not isinstance(player, dict):
@@ -155,6 +184,9 @@ def _validate_selected_players(players, owned_players):
             continue
         if str(player_id) not in owned_ids:
             return None, 'Team selection can only include players you have already bought.'
+        if str(player_id) in seen_ids:
+            return None, 'This player is already selected in your team.'
+        seen_ids.add(str(player_id))
 
         player_obj = Player.objects.filter(player_api_id=player_id).first()
         if player_obj:
@@ -235,6 +267,30 @@ def _match_payload(match):
     }
 
 
+def _admin_match_payload(match):
+    score = None
+    if match.home_score is not None and match.away_score is not None:
+        score = f"{match.home_score} - {match.away_score}"
+    return {
+        'id': str(match.pk),
+        'matchday': match.matchday,
+        'home_team': match.home_team,
+        'away_team': match.away_team,
+        'status': match.status,
+        'kickoff': match.kickoff.isoformat() if match.kickoff else None,
+        'score': score,
+        'home_score': match.home_score,
+        'away_score': match.away_score,
+        'source': 'admin',
+    }
+
+
+def _optional_int(value):
+    if value in ('', None):
+        return None
+    return int(value)
+
+
 def _difficulty_for_match(match):
     home_id = match.get('homeTeam', {}).get('id') or 0
     away_id = match.get('awayTeam', {}).get('id') or 0
@@ -289,12 +345,7 @@ class GoogleLoginView(APIView):
             # Create standard JWT tokens
             refresh = RefreshToken.for_user(user)
             return Response({
-                'user': {
-                    'id': str(user.pk),
-                    'username': user.username,
-                    'email': user.email,
-                    'role': 'admin' if user.is_staff else 'user'
-                },
+                'user': _user_payload(user, request),
                 'tokens': {
                     'refresh': str(refresh),
                     'access': str(refresh.access_token),
@@ -325,12 +376,7 @@ class DirectLoginView(APIView):
         if user is not None:
             refresh = RefreshToken.for_user(user)
             return Response({
-                'user': {
-                    'id': str(user.pk),
-                    'username': user.username,
-                    'email': user.email,
-                    'role': 'admin' if user.is_staff else 'user'
-                },
+                'user': _user_payload(user, request),
                 'tokens': {
                     'refresh': str(refresh),
                     'access': str(refresh.access_token),
@@ -338,6 +384,34 @@ class DirectLoginView(APIView):
             })
 
         return Response({'detail': 'Invalid email or password.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+class AdminLoginView(APIView):
+    """Authenticate real staff users and return standard JWT admin tokens."""
+    permission_classes = (AllowAny,)
+
+    def post(self, request):
+        email = request.data.get('email')
+        password = request.data.get('password')
+
+        if not email or not password:
+            return Response({'detail': 'Email and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = authenticate(request, username=email, password=password)
+        if user is None or not user.is_staff:
+            return Response({'detail': 'Invalid admin credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'admin': _user_payload(user, request),
+            'user': _user_payload(user, request),
+            'token': str(refresh.access_token),
+            'tokens': {
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+            },
+            'message': 'Admin login successful',
+        }, status=status.HTTP_200_OK)
 
 
 class Request2FAView(APIView):
@@ -356,12 +430,7 @@ class Request2FAView(APIView):
             # Generate tokens immediately
             refresh = RefreshToken.for_user(user)
             return Response({
-                'user': {
-                    'id': str(user.pk),
-                    'username': user.username,
-                    'email': user.email,
-                    'role': 'admin' if user.is_staff else 'user'
-                },
+                'user': _user_payload(user, request),
                 'tokens': {
                     'refresh': str(refresh),
                     'access': str(refresh.access_token),
@@ -409,12 +478,7 @@ class Verify2FAView(APIView):
             # Generate tokens
             refresh = RefreshToken.for_user(user)
             return Response({
-                'user': {
-                    'id': str(user.pk),
-                    'username': user.username,
-                    'email': user.email,
-                    'role': 'admin' if user.is_staff else 'user'
-                },
+                'user': _user_payload(user, request),
                 'tokens': {
                     'refresh': str(refresh),
                     'access': str(refresh.access_token),
@@ -496,12 +560,7 @@ class RegisterView(APIView):
         refresh = RefreshToken.for_user(user)
         return Response(
             {
-                'user': {
-                    'id': str(user.pk),
-                    'username': user.username,
-                    'email': user.email,
-                    'role': 'user'
-                },
+                'user': _user_payload(user, request),
                 'tokens': {
                     'refresh': str(refresh),
                     'access': str(refresh.access_token),
@@ -565,6 +624,8 @@ class AdminUserDetailView(APIView):
         for field in ('is_staff', 'is_active'):
             if field in request.data:
                 setattr(user, field, bool(request.data.get(field)))
+        if 'role' in request.data:
+            user.is_staff = request.data.get('role') == 'admin'
 
         user.save()
 
@@ -577,6 +638,14 @@ class AdminUserDetailView(APIView):
                 'is_active': user.is_active,
             }
         )
+
+    def delete(self, request, user_id):
+        if str(request.user.pk) == str(user_id):
+            return Response({'detail': 'You cannot delete your own admin account.'}, status=status.HTTP_400_BAD_REQUEST)
+        deleted, _ = User.objects.filter(pk=user_id).delete()
+        if not deleted:
+            return Response({'detail': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AdminPlayersView(APIView):
@@ -650,8 +719,57 @@ class AdminMatchesView(APIView):
 
     def get(self, request):
         requested_status = request.query_params.get('status')
-        matches = fetch_pl_matches(limit=None, status=requested_status)
-        return Response([_match_payload(match) for match in matches])
+        admin_matches = AdminMatch.objects.all().order_by('-created_at')
+        if requested_status:
+            admin_matches = admin_matches.filter(status__iexact=requested_status)
+        api_matches = fetch_pl_matches(limit=None, status=requested_status)
+        return Response(
+            [_admin_match_payload(match) for match in admin_matches]
+            + [_match_payload(match) for match in api_matches]
+        )
+
+    def post(self, request):
+        home_team = request.data.get('home_team')
+        away_team = request.data.get('away_team')
+        if not home_team or not away_team:
+            return Response({'detail': 'Home team and away team are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        match = AdminMatch.objects.create(
+            home_team=home_team,
+            away_team=away_team,
+            matchday=int(request.data.get('matchday') or 1),
+            status=request.data.get('status') or 'Scheduled',
+            home_score=_optional_int(request.data.get('home_score')),
+            away_score=_optional_int(request.data.get('away_score')),
+        )
+        return Response(_admin_match_payload(match), status=status.HTTP_201_CREATED)
+
+
+class AdminMatchDetailView(APIView):
+    permission_classes = (IsAdminUser,)
+
+    def patch(self, request, match_id):
+        match = AdminMatch.objects.filter(pk=match_id).first()
+        if not match:
+            return Response({'detail': 'Admin-managed match not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        for field in ('home_team', 'away_team', 'status'):
+            if field in request.data:
+                setattr(match, field, request.data.get(field))
+        if 'matchday' in request.data:
+            match.matchday = int(request.data.get('matchday') or match.matchday)
+        if 'home_score' in request.data:
+            match.home_score = _optional_int(request.data.get('home_score'))
+        if 'away_score' in request.data:
+            match.away_score = _optional_int(request.data.get('away_score'))
+        match.save()
+        return Response(_admin_match_payload(match))
+
+    def delete(self, request, match_id):
+        deleted, _ = AdminMatch.objects.filter(pk=match_id).delete()
+        if not deleted:
+            return Response({'detail': 'Admin-managed match not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class UserDashboardView(APIView):
@@ -1083,6 +1201,24 @@ class TransferHistoryView(APIView):
         ])
 
 
+class AdminTransfersView(APIView):
+    permission_classes = (IsAdminUser,)
+
+    def get(self, request):
+        records = TransferRecord.objects.select_related('user').order_by('-created_at')[:200]
+        return Response([
+            {
+                'id': str(record.pk),
+                'user': record.user.username,
+                'email': record.user.email,
+                'player_out': record.player_out,
+                'player_in': record.player_in,
+                'created_at': record.created_at.isoformat(),
+            }
+            for record in records
+        ])
+
+
 class WatchlistView(APIView):
     permission_classes = (IsAuthenticated,)
 
@@ -1201,12 +1337,34 @@ class ProfileUpdateView(APIView):
         
         user.save()
         return Response({
-            'user': {
-                'id': str(user.pk),
-                'username': user.username,
-                'email': user.email,
-                'role': 'admin' if user.is_staff else 'user'
-            }
+            'user': _user_payload(user, request)
+        })
+
+
+class ProfilePictureUploadView(APIView):
+    permission_classes = (IsAuthenticated,)
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request):
+        image = request.FILES.get('profile_picture') or request.FILES.get('image')
+        if not image:
+            return Response({'detail': 'Profile picture file is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        ext = os.path.splitext(image.name or '')[1].lower()
+        content_type = getattr(image, 'content_type', '')
+        if content_type not in PROFILE_IMAGE_TYPES or ext not in PROFILE_IMAGE_EXTENSIONS:
+            return Response({'detail': 'Only JPG, JPEG, PNG, and WEBP images are allowed.'}, status=status.HTTP_400_BAD_REQUEST)
+        if image.size > PROFILE_IMAGE_MAX_BYTES:
+            return Response({'detail': 'Profile picture must be 2MB or smaller.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        storage = FileSystemStorage(location=settings.MEDIA_ROOT / 'profile_pictures')
+        filename = storage.save(f"{request.user.pk}_{uuid.uuid4().hex}{ext}", image)
+        request.user.profile_picture = f"{settings.MEDIA_URL}profile_pictures/{filename}"
+        request.user.save(update_fields=['profile_picture'])
+        return Response({
+            'detail': 'Profile picture updated.',
+            'user': _user_payload(request.user, request),
+            'profile_picture': _profile_picture_url(request.user, request),
         })
 
 class ChangePasswordView(APIView):
@@ -1360,99 +1518,207 @@ class WeeklyLeaderboardView(APIView):
             return Response({'detail': f"Backend Error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+def _record_key(record):
+    if isinstance(record, dict):
+        return record.get('key')
+    return str(record) if record else None
+
+
+def _append_notification_once(team, key, message):
+    notifications = list(team.notifications or [])
+    if any(item.get('key') == key for item in notifications if isinstance(item, dict)):
+        return
+    notifications.append({
+        'id': key,
+        'key': key,
+        'type': 'points',
+        'message': message,
+        'created_at': timezone.now().isoformat(),
+        'read': False,
+    })
+    team.notifications = notifications[-50:]
+
+
+def _result_for_team(match, team_api_id):
+    home = match.get('homeTeam') or {}
+    away = match.get('awayTeam') or {}
+    home_id = home.get('id')
+    away_id = away.get('id')
+    score = (match.get('score') or {}).get('fullTime') or {}
+    home_score = score.get('home')
+    away_score = score.get('away')
+    if team_api_id not in (home_id, away_id) or home_score is None or away_score is None:
+        return None
+
+    is_home = team_api_id == home_id
+    team_name = (home if is_home else away).get('shortName') or (home if is_home else away).get('name')
+    if home_score == away_score:
+        return {'points': 1, 'label': 'drew', 'team_name': team_name}
+    won = home_score > away_score if is_home else away_score > home_score
+    return {'points': 3 if won else 0, 'label': 'won' if won else 'lost', 'team_name': team_name}
+
+
+def _calculate_points_from_matches(team, matches, source='real'):
+    players = _lineup_for_points(team)
+    if not players:
+        return {'new_points': 0, 'matchweeks': [], 'processed': 0}
+
+    processed_records = list(team.processed_match_results or [])
+    processed_keys = {_record_key(record) for record in processed_records}
+    weekly_points = dict(team.weekly_points or {})
+    new_points = 0
+    processed_count = 0
+    processed_weeks = set(team.processed_matchweeks or [])
+    new_weeks = set()
+
+    for match in matches:
+        if match.get('status') != 'FINISHED':
+            continue
+        match_id = match.get('id')
+        matchweek = match.get('matchday')
+        if not match_id or not matchweek:
+            continue
+
+        for player in players:
+            if not isinstance(player, dict) or player.get('id') is None:
+                continue
+
+            player_obj = Player.objects.filter(player_api_id=player.get('id')).first()
+            team_api_id = player_obj.team_api_id if player_obj else player.get('team_api_id')
+            if not team_api_id:
+                continue
+
+            result = _result_for_team(match, team_api_id)
+            if result is None:
+                continue
+
+            key = f"{source}:match:{match_id}:player:{player.get('id')}"
+            if key in processed_keys:
+                continue
+
+            points = int(result['points'])
+            week_key = str(matchweek)
+            weekly_points[week_key] = int(weekly_points.get(week_key, 0)) + points
+            new_points += points
+            processed_count += 1
+            processed_weeks.add(matchweek)
+            new_weeks.add(matchweek)
+            processed_keys.add(key)
+            processed_records.append({
+                'key': key,
+                'source': source,
+                'match_id': match_id,
+                'matchweek': matchweek,
+                'player_id': player.get('id'),
+                'player_name': player_obj.name if player_obj else player.get('name', 'Player'),
+                'team_api_id': team_api_id,
+                'points': points,
+                'created_at': timezone.now().isoformat(),
+            })
+
+            player_name = player_obj.name if player_obj else player.get('name', 'Player')
+            team_name = result.get('team_name') or player.get('team') or 'Team'
+            _append_notification_once(
+                team,
+                f"points:{key}",
+                f"{team_name} {result['label']}. {player_name} earned {points} points.",
+            )
+
+    if processed_count:
+        team.points = int(team.points or 0) + int(new_points)
+        team.weekly_points = weekly_points
+        team.processed_matchweeks = sorted(processed_weeks)
+        team.processed_match_results = processed_records[-1000:]
+        team.last_synced_at = timezone.now()
+        team.save(update_fields=[
+            'points',
+            'weekly_points',
+            'processed_matchweeks',
+            'processed_match_results',
+            'notifications',
+            'last_synced_at',
+        ])
+        existing_reward_keys = {item.get('key') for item in (team.rewards or []) if isinstance(item, dict)}
+        update_rankings_and_rewards(matchweek=max(new_weeks) if new_weeks else None)
+        if source == 'simulation':
+            team.refresh_from_db()
+            rewards = list(team.rewards or [])
+            changed = False
+            for reward in rewards:
+                if (
+                    isinstance(reward, dict)
+                    and reward.get('key') not in existing_reward_keys
+                    and reward.get('matchweek') in new_weeks
+                ):
+                    reward['source'] = 'simulation'
+                    changed = True
+            if changed:
+                team.rewards = rewards
+                team.save(update_fields=['rewards'])
+
+    return {'new_points': int(new_points), 'matchweeks': sorted(processed_weeks), 'processed': processed_count}
+
+
+def _reset_simulation_points(team):
+    records = list(team.processed_match_results or [])
+    simulation_records = [record for record in records if isinstance(record, dict) and record.get('source') == 'simulation']
+    if not simulation_records:
+        return 0
+
+    weekly_points = dict(team.weekly_points or {})
+    removed_points = 0
+    simulation_weeks = set()
+    for record in simulation_records:
+        points = int(record.get('points') or 0)
+        week_key = str(record.get('matchweek'))
+        simulation_weeks.add(record.get('matchweek'))
+        removed_points += points
+        weekly_points[week_key] = max(0, int(weekly_points.get(week_key, 0)) - points)
+        if weekly_points[week_key] == 0:
+            weekly_points.pop(week_key, None)
+
+    simulation_rewards = [
+        reward for reward in list(team.rewards or [])
+        if isinstance(reward, dict) and reward.get('source') == 'simulation' and reward.get('matchweek') in simulation_weeks
+    ]
+    removed_reward = sum(Decimal(str(reward.get('reward') or 0)) for reward in simulation_rewards)
+
+    team.points = max(0, int(team.points or 0) - removed_points)
+    team.budget = max(Decimal('0.00'), Decimal(team.budget) - removed_reward)
+    team.weekly_points = weekly_points
+    team.rewards = [
+        reward for reward in list(team.rewards or [])
+        if not (isinstance(reward, dict) and reward.get('source') == 'simulation' and reward.get('matchweek') in simulation_weeks)
+    ]
+    team.processed_match_results = [
+        record for record in records
+        if not (isinstance(record, dict) and record.get('source') == 'simulation')
+    ]
+    team.notifications = [
+        item for item in list(team.notifications or [])
+        if not (isinstance(item, dict) and str(item.get('key') or item.get('id') or '').startswith('points:simulation:'))
+    ]
+    team.last_synced_at = timezone.now()
+    team.save(update_fields=['points', 'budget', 'weekly_points', 'processed_match_results', 'rewards', 'notifications', 'last_synced_at'])
+    update_rankings_and_rewards()
+    return removed_points
+
+
 def sync_user_points(user, initial=False):
-    """
-    Core logic to sync points for a user based on finished matches.
-    If initial=True, it will process the last 2 finished matchdays regardless of processed_matchweeks.
-    """
+    """Sync finished match points for selected players without duplicate awards."""
     try:
         team, _ = UserTeam.objects.get_or_create(user=user)
-        # Fetch a large set of finished matches
         finished_matches = fetch_pl_matches(limit=500, status='FINISHED')
         if not finished_matches:
             return 0
-        
-        # Group matches by matchday
-        matches_by_day = {}
-        for m in finished_matches:
-            day = m.get('matchday')
-            if day:
-                if day not in matches_by_day:
-                    matches_by_day[day] = []
-                matches_by_day[day].append(m)
-        
-        finished_days = sorted(matches_by_day.keys(), reverse=True)
-        if not finished_days:
-            return 0
 
-        processed = set(team.processed_matchweeks or [])
-        new_points = 0
-        days_to_process = []
+        if initial and not team.processed_match_results:
+            finished_days = sorted({m.get('matchday') for m in finished_matches if m.get('matchday')}, reverse=True)
+            allowed_days = set(finished_days[:2])
+            finished_matches = [m for m in finished_matches if m.get('matchday') in allowed_days]
 
-        if initial or not processed:
-            # For initial sync, we take the last 2 finished matchdays as a starting point
-            days_to_process = finished_days[:2]
-            # Clear processed for the days we are about to add to ensure no double counting if called again
-            processed = set([d for d in processed if d not in days_to_process])
-        else:
-            # Find all matchdays that haven't been processed yet
-            for d in finished_days:
-                if d not in processed:
-                    days_to_process.append(d)
-
-        if not days_to_process:
-            return 0
-
-        players = _lineup_for_points(team)
-        weekly_points = dict(team.weekly_points or {})
-        for day in days_to_process:
-            day_matches = matches_by_day[day]
-            day_points = 0
-            
-            # Map team_id to result for this day
-            results = {} # team_id -> points (3 for win, 1 for draw)
-            for m in day_matches:
-                home_team = m.get('homeTeam', {})
-                away_team = m.get('awayTeam', {})
-                ht = home_team.get('id')
-                at = away_team.get('id')
-                score = m.get('score', {}).get('fullTime', {})
-                hs = score.get('home')
-                ascore = score.get('away')
-                
-                if ht and at and hs is not None and ascore is not None:
-                    if hs > ascore:
-                        results[ht] = 3
-                        results[at] = 0
-                    elif ascore > hs:
-                        results[at] = 3
-                        results[ht] = 0
-                    else:
-                        results[ht] = 1
-                        results[at] = 1
-            
-            # Calculate points for squad
-            for p in players:
-                if not isinstance(p, dict):
-                    continue
-                player_id = p.get('id')
-                player_obj = Player.objects.filter(player_api_id=player_id).first()
-                if player_obj and player_obj.team_api_id in results:
-                    day_points += results[player_obj.team_api_id]
-            
-            weekly_points[str(day)] = int(weekly_points.get(str(day), 0)) + int(day_points)
-            new_points += day_points
-            processed.add(day)
-
-        team.points += new_points
-        team.weekly_points = weekly_points
-        team.processed_matchweeks = sorted(list(processed))
-        team.last_synced_at = timezone.now()
-        team.save()
-
-        update_rankings_and_rewards(matchweek=max(days_to_process) if days_to_process else None)
-            
-        return new_points
+        result = _calculate_points_from_matches(team, finished_matches, source='real')
+        return result['new_points']
     except Exception as e:
         print(f"Error syncing points for {user.email}: {e}")
         return 0
@@ -1471,7 +1737,49 @@ class SyncPointsView(APIView):
             'new_points': new_points,
             'total_points': team.points,
             'processed_matchweeks': team.processed_matchweeks,
+            'processed_match_results': team.processed_match_results or [],
             'weekly_points': team.weekly_points,
             'budget': float(team.budget),
             'rewards': team.rewards or [],
+        })
+
+
+class SimulateLastMatchweekView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        team, _ = UserTeam.objects.get_or_create(user=request.user)
+        if request.data.get('reset'):
+            removed_points = _reset_simulation_points(team)
+            if not request.data.get('recalculate', False):
+                return Response({
+                    'detail': 'Simulation points reset.',
+                    'removed_points': removed_points,
+                    'total_points': team.points,
+                    'weekly_points': team.weekly_points,
+                })
+
+        finished_matches = fetch_pl_matches(limit=500, status='FINISHED')
+        latest_matchweek = max((m.get('matchday') for m in finished_matches if m.get('matchday')), default=None)
+        if latest_matchweek is None:
+            return Response({'detail': 'No completed matchweek is available for simulation.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        latest_matches = [match for match in finished_matches if match.get('matchday') == latest_matchweek]
+        result = _calculate_points_from_matches(team, latest_matches, source='simulation')
+        team.refresh_from_db()
+        message = (
+            f"Simulated matchweek {latest_matchweek}. Awarded {result['new_points']} points."
+            if result['processed']
+            else f"Matchweek {latest_matchweek} was already simulated for this squad."
+        )
+        return Response({
+            'detail': message,
+            'matchweek': latest_matchweek,
+            'new_points': result['new_points'],
+            'processed': result['processed'],
+            'total_points': team.points,
+            'weekly_points': team.weekly_points,
+            'budget': float(team.budget),
+            'rewards': team.rewards or [],
+            'notifications': team.notifications or [],
         })

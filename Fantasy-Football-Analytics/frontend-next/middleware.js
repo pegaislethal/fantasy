@@ -27,8 +27,13 @@ export function middleware(request) {
 
   const requiresAuth = PROTECTED_PREFIXES.some((prefix) => pathname.startsWith(prefix));
   const requiresAdmin = pathname.startsWith(ADMIN_PREFIX);
+  const isAdminAuthPage = pathname === "/admin/login" || pathname === "/admin/signup";
 
   if (!requiresAuth && !requiresAdmin) {
+    return NextResponse.next();
+  }
+
+  if (isAdminAuthPage) {
     return NextResponse.next();
   }
 
@@ -36,12 +41,14 @@ export function middleware(request) {
   const role = request.cookies.get("ff_role")?.value;
 
   if (!accessToken) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(new URL(requiresAdmin ? "/admin/login" : "/login", request.url));
   }
 
   if (isTokenExpired(accessToken)) {
-    const response = NextResponse.redirect(new URL("/login", request.url));
+    const response = NextResponse.redirect(new URL(requiresAdmin ? "/admin/login" : "/login", request.url));
     response.cookies.set("ff_access", "", { maxAge: 0 });
+    response.cookies.set("ff_refresh", "", { maxAge: 0 });
+    response.cookies.set("ff_role", "", { maxAge: 0 });
     return response;
   }
 

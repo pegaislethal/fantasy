@@ -2,7 +2,10 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from .views import (
+    AdminLoginView,
     AdminStatsView,
+    AdminTransfersView,
+    AdminMatchDetailView,
     AdminMatchesView,
     AdminPlayerDetailView,
     AdminPlayersView,
@@ -30,9 +33,11 @@ from .views import (
     WatchlistView,
     WeeklyLeaderboardView,
     ProfileUpdateView,
+    ProfilePictureUploadView,
     ChangePasswordView,
     LeaderboardView,
     SyncPointsView,
+    SimulateLastMatchweekView,
     TopAttackersView,
 )
 
@@ -40,6 +45,7 @@ urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
     path('register/code/', RequestSignupCodeView.as_view(), name='register_code'),
     path('auth/login/', DirectLoginView.as_view(), name='direct_login'),
+    path('auth/admin/login/', AdminLoginView.as_view(), name='admin_login'),
     path('auth/google/', GoogleLoginView.as_view(), name='google_login'),
     path('auth/password-reset/request/', PasswordResetRequestView.as_view(), name='password_reset_request'),
     path('auth/password-reset/confirm/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
@@ -53,6 +59,8 @@ urlpatterns = [
     path('admin/players/', AdminPlayersView.as_view(), name='admin_players'),
     path('admin/players/<int:player_id>/', AdminPlayerDetailView.as_view(), name='admin_player_detail'),
     path('admin/matches/', AdminMatchesView.as_view(), name='admin_matches'),
+    path('admin/matches/<str:match_id>/', AdminMatchDetailView.as_view(), name='admin_match_detail'),
+    path('admin/transfers/', AdminTransfersView.as_view(), name='admin_transfers'),
     path('user/analytics/', AnalyticsSummaryView.as_view(), name='user_analytics'),
     path('user/dashboard/', UserDashboardView.as_view(), name='user_dashboard'),
     path('user/team/', UserTeamView.as_view(), name='user_team'),
@@ -67,9 +75,10 @@ urlpatterns = [
     path('user/watchlist/', WatchlistView.as_view(), name='user_watchlist'),
     path('user/notifications/', NotificationsView.as_view(), name='user_notifications'),
     path('user/profile/update/', ProfileUpdateView.as_view(), name='profile_update'),
+    path('user/profile/picture/', ProfilePictureUploadView.as_view(), name='profile_picture_upload'),
     path('user/password/change/', ChangePasswordView.as_view(), name='password_change'),
     path('user/leaderboard/', LeaderboardView.as_view(), name='user_leaderboard'),
     path('user/leaderboard/weekly/', WeeklyLeaderboardView.as_view(), name='user_weekly_leaderboard'),
     path('user/sync-points/', SyncPointsView.as_view(), name='user-sync-points'),
+    path('user/simulate-last-matchweek/', SimulateLastMatchweekView.as_view(), name='simulate-last-matchweek'),
 ]
-

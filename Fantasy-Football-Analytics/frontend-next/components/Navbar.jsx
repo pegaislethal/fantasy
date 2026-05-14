@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { LayoutDashboard, Users, Trophy, BrainCircuit, LogOut, Menu, User, Calendar, ArrowRightLeft, ShieldCheck } from "lucide-react";
-import { APP_ROUTES } from "@/utils/constants";
+import { API_BASE_URL, APP_ROUTES } from "@/utils/constants";
 import { useAuth } from "@/context/AuthContext";
 
 const links = [
@@ -23,6 +23,11 @@ const adminLinks = [
 export default function Navbar() {
   const pathname = usePathname();
   const { isAuthenticated, user, logout } = useAuth();
+  const profilePicture = user?.profile_picture
+    ? user.profile_picture.startsWith("http")
+      ? user.profile_picture
+      : `${API_BASE_URL}${user.profile_picture}`
+    : "";
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b border-border/30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 shadow-sm">
@@ -92,8 +97,12 @@ export default function Navbar() {
                   href={APP_ROUTES.profile}
                   className="hidden md:inline-flex items-center gap-3"
                 >
-                  <div className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold">
-                    {user?.username?.[0]?.toUpperCase() || <User className="h-4 w-4" />}
+                  <div className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold overflow-hidden">
+                    {profilePicture ? (
+                      <img src={profilePicture} alt="Profile" className="h-full w-full object-cover" />
+                    ) : (
+                      user?.username?.[0]?.toUpperCase() || <User className="h-4 w-4" />
+                    )}
                   </div>
                 </Link>
                 <button

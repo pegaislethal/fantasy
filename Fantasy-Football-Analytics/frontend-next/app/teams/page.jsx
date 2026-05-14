@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Users, ShieldCheck, Zap, Plus, ArrowRightLeft, Settings2, Filter, X } from "lucide-react";
 import { createNewSquad, getMyTeam, switchSquad, updateTeam } from "@/services/teamService";
 import { getMyTeamSuggestions } from "@/services/predictionService";
+import { simulateLastMatchweekPoints } from "@/services/leaderboardService";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { APP_ROUTES } from "@/utils/constants";
 
@@ -47,6 +48,9 @@ export default function TeamsPage() {
   const [showPlayerList, setShowPlayerList] = useState(false);
   const [showFormationMenu, setShowFormationMenu] = useState(false);
   const [selectedSlotIndex, setSelectedSlotIndex] = useState(null);
+  const [selectionNotice, setSelectionNotice] = useState("");
+  const [simulationMessage, setSimulationMessage] = useState("");
+  const [simulationLoading, setSimulationLoading] = useState(false);
   const [strategy, setStrategy] = useState(null);
 
   function readOwnedPlayersFallback() {
@@ -167,6 +171,12 @@ export default function TeamsPage() {
 
   function filteredPlayers() {
     let players = ownedPlayers.filter((p) => p.name && p.name.toLowerCase().includes(filter.toLowerCase()));
+    const selectedIds = new Set(
+      (team.players || [])
+        .map((player, index) => (index === selectedSlotIndex ? null : player?.id))
+        .filter((id) => id !== null && id !== undefined)
+        .map((id) => String(id))
+    );
     
     // Filter by position if a specific slot is selected
     if (selectedSlotIndex !== null) {
@@ -181,7 +191,7 @@ export default function TeamsPage() {
       }
     }
     
-    return players;
+    return players.filter((player) => !selectedIds.has(String(player?.id)));
   }
 
   function getNumeric(player, keys) {
@@ -294,6 +304,14 @@ export default function TeamsPage() {
   }
 
   async function handleSelectPlayer(player) {
+    const duplicateSelected = (team.players || []).some(
+      (selected, index) => index !== selectedSlotIndex && String(selected?.id) === String(player?.id)
+    );
+    if (duplicateSelected) {
+      setSelectionNotice("This player is already selected in your team.");
+      return;
+    }
+
     // assign player to selected slot
     const newPlayers = team.players ? [...team.players] : [];
     if (selectedSlotIndex == null) {
@@ -304,11 +322,13 @@ export default function TeamsPage() {
     setTeam((t) => ({ ...t, players: newPlayers }));
     setShowPlayerList(false);
     setSelectedSlotIndex(null);
+    setSelectionNotice("");
     try {
       const updated = await updateTeam({ squad_id: currentSquadId, squad_name: squadName, players: newPlayers, formation: team.formation });
       if (updated) applyTeamPayload(updated);
     } catch (e) {
       console.warn("Failed to update team", e);
+      setSelectionNotice(e.message || "Failed to update team.");
     }
   }
 
@@ -360,7 +380,23 @@ export default function TeamsPage() {
 
   function openPlayerSelector(slotIndex) {
     setSelectedSlotIndex(slotIndex);
+    setSelectionNotice("");
     setShowPlayerList(true);
+  }
+
+  async function handleSimulateLastMatchweek(reset = false) {
+    setSimulationLoading(true);
+    setSimulationMessage("");
+    try {
+      const res = await simulateLastMatchweekPoints(reset);
+      setSimulationMessage(res?.detail || "Simulation finished.");
+      const refreshed = await getMyTeam();
+      if (refreshed) applyTeamPayload(refreshed);
+    } catch (e) {
+      setSimulationMessage(e.message || "Failed to simulate points.");
+    } finally {
+      setSimulationLoading(false);
+    }
   }
 
   async function handleAutoOptimize() {
@@ -640,6 +676,23 @@ export default function TeamsPage() {
               <ArrowRightLeft className="h-4 w-4" />
               Auto-Optimize Squad
             </button>
+            <div className="mt-3 grid grid-cols-1 gap-2">
+              <button
+                onClick={() => handleSimulateLastMatchweek(false)}
+                disabled={simulationLoading}
+                className="w-full py-3 rounded-xl bg-primary text-primary-foreground font-bold text-sm hover:opacity-90 transition-opacity"
+              >
+                {simulationLoading ? "Simulating..." : "Simulate Last Matchweek Points"}
+              </button>
+              <button
+                onClick={() => handleSimulateLastMatchweek(true)}
+                disabled={simulationLoading}
+                className="w-full py-2 rounded-xl border border-border text-muted-foreground font-bold text-xs hover:bg-muted/30 transition-colors"
+              >
+                Reset Simulation Points
+              </button>
+              {simulationMessage ? <p className="text-xs text-muted-foreground">{simulationMessage}</p> : null}
+            </div>
           </motion.div>
 
           <motion.div
@@ -705,6 +758,11 @@ export default function TeamsPage() {
               onChange={(e) => setFilter(e.target.value)}
               className="w-full px-3 py-2 rounded-md border mb-4"
             />
+            {selectionNotice ? (
+              <div className="mb-3 p-3 text-sm text-yellow-700 dark:text-yellow-300 border border-yellow-500/30 bg-yellow-500/10 rounded">
+                {selectionNotice}
+              </div>
+            ) : null}
             <div className="space-y-2">
               {filteredPlayers().length > 0 ? (
                 filteredPlayers().map((p) => (

@@ -42,6 +42,8 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
             'username': user.username,
             'email': user.email,
             'is_staff': user.is_staff,
+            'role': data['role'],
+            'profile_picture': user.profile_picture,
         }
         return data
 

@@ -24,3 +24,7 @@ export function getNotifications() {
 export function syncPoints(initial = false) {
   return apiPost("/api/user/sync-points/", { initial });
 }
+
+export function simulateLastMatchweekPoints(reset = false) {
+  return apiPost("/api/user/simulate-last-matchweek/", { reset });
+}

@@ -33,8 +33,13 @@ async function request(path, options = {}) {
   if (response.status === 401) {
     if (typeof window !== "undefined") {
       localStorage.removeItem("ff_access");
+      localStorage.removeItem("ff_refresh");
       localStorage.removeItem("ff_user");
+      localStorage.removeItem("ff_admin_token");
+      localStorage.removeItem("ff_admin_email");
       document.cookie = "ff_access=; Path=/; Max-Age=0;";
+      document.cookie = "ff_refresh=; Path=/; Max-Age=0;";
+      document.cookie = "ff_role=; Path=/; Max-Age=0;";
       // Avoid redirect loops if already on home
       if (window.location.pathname !== "/") {
         window.location.href = "/";

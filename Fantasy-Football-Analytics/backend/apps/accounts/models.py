@@ -7,6 +7,7 @@ class User(AbstractUser):
     """Application users; documents are stored in the MongoDB `Users` collection."""
     two_factor_code = models.CharField(max_length=6, blank=True, null=True)
     two_factor_expiry = models.DateTimeField(blank=True, null=True)
+    profile_picture = models.CharField(max_length=500, blank=True, default='')
 
     class Meta:
         db_table = 'Users'
@@ -43,6 +44,7 @@ class UserTeam(models.Model):
     points = models.PositiveIntegerField(default=0) # Total points accumulated
     weekly_points = models.JSONField(default=dict, blank=True) # { "1": 12, "2": 9 }
     processed_matchweeks = models.JSONField(default=list, blank=True) # [1, 2, 3, ...]
+    processed_match_results = models.JSONField(default=list, blank=True) # de-dupe point awards per match/player/source
     rewards = models.JSONField(default=list, blank=True) # [{ "matchweek": 1, "reward": 15000000 }]
     watchlist = models.JSONField(default=list, blank=True) # [{ "id": 1, "name": "Player" }]
     notifications = models.JSONField(default=list, blank=True) # lightweight user alerts
@@ -61,6 +63,20 @@ class TransferRecord(models.Model):
 
     class Meta:
         db_table = 'TransferRecords'
+
+
+class AdminMatch(models.Model):
+    home_team = models.CharField(max_length=150)
+    away_team = models.CharField(max_length=150)
+    matchday = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=50, default='Scheduled')
+    home_score = models.IntegerField(null=True, blank=True)
+    away_score = models.IntegerField(null=True, blank=True)
+    kickoff = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'AdminMatches'
 
 
 class Player(models.Model):

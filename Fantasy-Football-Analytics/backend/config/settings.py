@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'config.apps.MongoAdminConfig',
     'config.apps.MongoAuthConfig',
     'config.apps.MongoContentTypesConfig',
+    'config.apps.MongoBootstrapConfig',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
@@ -144,11 +145,14 @@ CSRF_TRUSTED_ORIGINS = env_list(
 
 # Database
 
+MONGO_URI = os.environ.get('MONGO_URI', os.environ.get('MONGODB_URI', 'mongodb://127.0.0.1:27017'))
+MONGO_DB_NAME = os.environ.get('MONGO_DB_NAME', 'fantasyfootball_db')
+
 DATABASES = {
     'default': {
         'ENGINE': 'django_mongodb_backend',
-        'NAME': 'fantasyfootball_db',
-        'HOST': os.environ.get('MONGODB_URI', 'mongodb://127.0.0.1:27017'),
+        'NAME': MONGO_DB_NAME,
+        'HOST': MONGO_URI,
     },
 }
 

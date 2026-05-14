@@ -45,7 +45,7 @@ export default function Home() {
           Next-Gen FPL Analytics
         </motion.div>
 
-        <motion.h1 variants={itemVariants} className="text-5xl md:text-7xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-200 to-slate-400 drop-shadow-sm">
+        <motion.h1 variants={itemVariants} className="text-5xl md:text-7xl font-extrabold tracking-tight bg-clip-text text-transparent bg-linear-to-r from-white via-slate-200 to-slate-400 drop-shadow-sm">
           Dominate Your League <br className="hidden sm:block" /> with AI Insights
         </motion.h1>
 

@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 import os
 import random
 import string
@@ -11,6 +11,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.storage import FileSystemStorage
 from django.db import transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework import status
@@ -119,6 +120,163 @@ def _normalize_player_from_db(player_obj, existing=None):
 def _lineup_for_points(team):
     selected = _clean_players(getattr(team, 'selected_players', None))
     return selected or _clean_players(team.players)
+
+
+def _coerce_datetime(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        dt = parse_datetime(str(value))
+    if dt is None:
+        return None
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, dt_timezone.utc)
+    return dt
+
+
+def _match_kickoff(match):
+    return _coerce_datetime(match.get('utcDate') or match.get('kickoff'))
+
+
+def _ownership_intervals_for_team(team):
+    intervals = {}
+    open_intervals = {}
+    events = []
+
+    for player in _clean_players(team.players):
+        player_name = player.get('name')
+        started_at = _coerce_datetime(player.get('added_at')) or _coerce_datetime(team.user.date_joined)
+        if player_name and started_at:
+            events.append((started_at, 'buy', player_name))
+
+    for record in TransferRecord.objects.filter(user=team.user).order_by('created_at', 'id'):
+        if record.player_out and record.player_out != '(bought)':
+            events.append((record.created_at, 'sell', record.player_out))
+        if record.player_in and record.player_in != '(sold)':
+            events.append((record.created_at, 'buy', record.player_in))
+
+    events.sort(key=lambda item: item[0])
+
+    for event_time, event_type, player_name in events:
+        if not player_name:
+            continue
+        if event_type == 'buy':
+            open_intervals.setdefault(player_name, event_time)
+            continue
+
+        started_at = open_intervals.pop(player_name, None)
+        if started_at:
+            intervals.setdefault(player_name, []).append((started_at, event_time))
+
+    for player_name, started_at in open_intervals.items():
+        intervals.setdefault(player_name, []).append((started_at, None))
+
+    return intervals
+
+
+def _player_owned_at_kickoff(team, player_name, kickoff, ownership_intervals=None):
+    if not player_name or kickoff is None:
+        return False
+
+    ownership_intervals = ownership_intervals or _ownership_intervals_for_team(team)
+    for started_at, ended_at in ownership_intervals.get(player_name, []):
+        if started_at and kickoff < started_at:
+            continue
+        if ended_at and kickoff >= ended_at:
+            continue
+        return True
+    return False
+
+
+def _match_has_eligible_points(team, match, *, ownership_intervals=None, registration_at=None):
+    if match.get('status') != 'FINISHED':
+        return False
+
+    kickoff = _match_kickoff(match)
+    if registration_at and kickoff and kickoff < registration_at:
+        return False
+
+    players = _lineup_for_points(team)
+    ownership_intervals = ownership_intervals or _ownership_intervals_for_team(team)
+
+    for player in players:
+        if not isinstance(player, dict) or player.get('id') is None:
+            continue
+        player_obj = Player.objects.filter(player_api_id=player.get('id')).first()
+        player_name = player_obj.name if player_obj else player.get('name')
+        if not _player_owned_at_kickoff(team, player_name, kickoff, ownership_intervals):
+            continue
+
+        team_api_id = player_obj.team_api_id if player_obj else player.get('team_api_id')
+        if not team_api_id:
+            continue
+
+        if _result_for_team(match, team_api_id) is not None:
+            return True
+
+    return False
+
+
+def _reconcile_team_points(team, finished_matches=None):
+    finished_matches = finished_matches or fetch_pl_matches(limit=500, status='FINISHED')
+    match_index = {
+        str(match.get('id')): match
+        for match in finished_matches
+        if match.get('id')
+    }
+    ownership_intervals = _ownership_intervals_for_team(team)
+    registration_at = _coerce_datetime(team.user.date_joined)
+
+    recomputed_points = 0
+    weekly_points = {}
+    processed_weeks = set()
+    seen_keys = set()
+
+    for record in list(team.processed_match_results or []):
+        if not isinstance(record, dict):
+            continue
+        key = _record_key(record)
+        if not key or key in seen_keys:
+            continue
+        seen_keys.add(key)
+
+        match = match_index.get(str(record.get('match_id')))
+        if not match or match.get('status') != 'FINISHED':
+            continue
+
+        kickoff = _match_kickoff(match)
+        if registration_at and kickoff and kickoff < registration_at:
+            continue
+
+        player_id = record.get('player_id')
+        player_obj = Player.objects.filter(player_api_id=player_id).first() if player_id is not None else None
+        player_name = record.get('player_name') or (player_obj.name if player_obj else None)
+        if not _player_owned_at_kickoff(team, player_name, kickoff, ownership_intervals):
+            continue
+
+        team_api_id = record.get('team_api_id') or (player_obj.team_api_id if player_obj else None)
+        if not team_api_id:
+            continue
+
+        result = _result_for_team(match, team_api_id)
+        if result is None:
+            continue
+
+        points = int(result['points'])
+        week_key = str(record.get('matchweek') or match.get('matchday'))
+        weekly_points[week_key] = int(weekly_points.get(week_key, 0)) + points
+        recomputed_points += points
+        if week_key.isdigit():
+            processed_weeks.add(int(week_key))
+
+    team.points = int(recomputed_points)
+    team.weekly_points = weekly_points
+    team.processed_matchweeks = sorted(processed_weeks)
+    team.last_synced_at = timezone.now()
+    team.save(update_fields=['points', 'weekly_points', 'processed_matchweeks', 'last_synced_at'])
+    return recomputed_points
 
 
 def _squad_payload(*, squad_id, name, selected_players=None, formation='4-4-2', layout=None):
@@ -1453,8 +1611,12 @@ class LeaderboardView(APIView):
 
     def get(self, request):
         try:
+            finished_matches = fetch_pl_matches(limit=500, status='FINISHED')
+            teams = list(UserTeam.objects.select_related('user').all())
+            for team in teams:
+                _reconcile_team_points(team, finished_matches=finished_matches)
             update_rankings_and_rewards()
-            teams = UserTeam.objects.all().order_by('-points')
+            teams.sort(key=lambda team: team.points, reverse=True)
             leaderboard = []
             for i, team in enumerate(teams):
                 rank = i + 1
@@ -1480,10 +1642,14 @@ class WeeklyLeaderboardView(APIView):
 
     def get(self, request):
         try:
+            finished_matches = fetch_pl_matches(limit=500, status='FINISHED')
+            teams = list(UserTeam.objects.select_related('user').all())
+            for team in teams:
+                _reconcile_team_points(team, finished_matches=finished_matches)
             matchweek = request.query_params.get('matchweek')
             if matchweek is None:
                 weeks = []
-                for team in UserTeam.objects.all():
+                for team in teams:
                     weeks.extend(int(key) for key in (team.weekly_points or {}).keys() if str(key).isdigit())
                 matchweek = max(weeks) if weeks else None
             else:
@@ -1493,7 +1659,6 @@ class WeeklyLeaderboardView(APIView):
                 update_rankings_and_rewards(matchweek=matchweek)
 
             week_key = str(matchweek) if matchweek is not None else None
-            teams = list(UserTeam.objects.all())
             teams.sort(key=lambda team: int((team.weekly_points or {}).get(week_key, 0)) if week_key else 0, reverse=True)
 
             rows = []
@@ -1520,7 +1685,12 @@ class WeeklyLeaderboardView(APIView):
 
 def _record_key(record):
     if isinstance(record, dict):
-        return record.get('key')
+        key = record.get('key')
+        if not key:
+            return None
+        if key.startswith('real:') or key.startswith('simulation:'):
+            return key.split(':', 1)[1]
+        return key
     return str(record) if record else None
 
 
@@ -1565,18 +1735,21 @@ def _calculate_points_from_matches(team, matches, source='real'):
 
     processed_records = list(team.processed_match_results or [])
     processed_keys = {_record_key(record) for record in processed_records}
-    weekly_points = dict(team.weekly_points or {})
     new_points = 0
     processed_count = 0
-    processed_weeks = set(team.processed_matchweeks or [])
-    new_weeks = set()
+    processed_weeks = set()
+    registration_at = _coerce_datetime(team.user.date_joined)
+    ownership_intervals = _ownership_intervals_for_team(team)
 
     for match in matches:
         if match.get('status') != 'FINISHED':
             continue
         match_id = match.get('id')
         matchweek = match.get('matchday')
+        kickoff = _match_kickoff(match)
         if not match_id or not matchweek:
+            continue
+        if registration_at and kickoff and kickoff < registration_at:
             continue
 
         for player in players:
@@ -1584,6 +1757,10 @@ def _calculate_points_from_matches(team, matches, source='real'):
                 continue
 
             player_obj = Player.objects.filter(player_api_id=player.get('id')).first()
+            player_name = player_obj.name if player_obj else player.get('name', 'Player')
+            if not _player_owned_at_kickoff(team, player_name, kickoff, ownership_intervals):
+                continue
+
             team_api_id = player_obj.team_api_id if player_obj else player.get('team_api_id')
             if not team_api_id:
                 continue
@@ -1592,17 +1769,14 @@ def _calculate_points_from_matches(team, matches, source='real'):
             if result is None:
                 continue
 
-            key = f"{source}:match:{match_id}:player:{player.get('id')}"
+            key = f"match:{match_id}:player:{player.get('id')}"
             if key in processed_keys:
                 continue
 
             points = int(result['points'])
-            week_key = str(matchweek)
-            weekly_points[week_key] = int(weekly_points.get(week_key, 0)) + points
             new_points += points
             processed_count += 1
             processed_weeks.add(matchweek)
-            new_weeks.add(matchweek)
             processed_keys.add(key)
             processed_records.append({
                 'key': key,
@@ -1616,45 +1790,21 @@ def _calculate_points_from_matches(team, matches, source='real'):
                 'created_at': timezone.now().isoformat(),
             })
 
-            player_name = player_obj.name if player_obj else player.get('name', 'Player')
             team_name = result.get('team_name') or player.get('team') or 'Team'
             _append_notification_once(
                 team,
-                f"points:{key}",
+                f"points:{source}:{key}",
                 f"{team_name} {result['label']}. {player_name} earned {points} points.",
             )
 
     if processed_count:
-        team.points = int(team.points or 0) + int(new_points)
-        team.weekly_points = weekly_points
-        team.processed_matchweeks = sorted(processed_weeks)
         team.processed_match_results = processed_records[-1000:]
-        team.last_synced_at = timezone.now()
         team.save(update_fields=[
-            'points',
-            'weekly_points',
-            'processed_matchweeks',
             'processed_match_results',
             'notifications',
-            'last_synced_at',
         ])
-        existing_reward_keys = {item.get('key') for item in (team.rewards or []) if isinstance(item, dict)}
-        update_rankings_and_rewards(matchweek=max(new_weeks) if new_weeks else None)
-        if source == 'simulation':
-            team.refresh_from_db()
-            rewards = list(team.rewards or [])
-            changed = False
-            for reward in rewards:
-                if (
-                    isinstance(reward, dict)
-                    and reward.get('key') not in existing_reward_keys
-                    and reward.get('matchweek') in new_weeks
-                ):
-                    reward['source'] = 'simulation'
-                    changed = True
-            if changed:
-                team.rewards = rewards
-                team.save(update_fields=['rewards'])
+
+    _reconcile_team_points(team, finished_matches=matches)
 
     return {'new_points': int(new_points), 'matchweeks': sorted(processed_weeks), 'processed': processed_count}
 
@@ -1765,7 +1915,26 @@ class SimulateLastMatchweekView(APIView):
             return Response({'detail': 'No completed matchweek is available for simulation.'}, status=status.HTTP_400_BAD_REQUEST)
 
         latest_matches = [match for match in finished_matches if match.get('matchday') == latest_matchweek]
-        result = _calculate_points_from_matches(team, latest_matches, source='simulation')
+        registration_at = _coerce_datetime(team.user.date_joined)
+        ownership_intervals = _ownership_intervals_for_team(team)
+        eligible_matches = [
+            match
+            for match in latest_matches
+            if _match_has_eligible_points(
+                team,
+                match,
+                ownership_intervals=ownership_intervals,
+                registration_at=registration_at,
+            )
+        ]
+
+        if not eligible_matches:
+            return Response(
+                {'detail': 'No valid matches are available to simulate for this squad.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        result = _calculate_points_from_matches(team, eligible_matches, source='simulation')
         team.refresh_from_db()
         message = (
             f"Simulated matchweek {latest_matchweek}. Awarded {result['new_points']} points."

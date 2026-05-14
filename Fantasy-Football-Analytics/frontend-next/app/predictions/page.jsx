@@ -17,6 +17,7 @@ import {
   getPlayerPerformance,
   getWeekPredictions,
 } from "@/services/predictionService";
+import { getTransferMarket } from "@/services/transferService";
 
 const containerVariants = {
   hidden: { opacity: 0 },

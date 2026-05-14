@@ -4,10 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { LayoutDashboard, Users, Trophy, BrainCircuit, LogOut, Menu, User, Calendar, ArrowRightLeft, ShieldCheck } from "lucide-react";
+import { Settings } from "lucide-react";
 import { API_BASE_URL, APP_ROUTES } from "@/utils/constants";
 import { useAuth } from "@/context/AuthContext";
+import { useRef, useEffect, useState } from "react";
 
-const links = [
+const links = [ 
   { href: APP_ROUTES.dashboard, label: "Dashboard", icon: LayoutDashboard },
   { href: APP_ROUTES.team, label: "Team", icon: Users },
   { href: APP_ROUTES.transfers, label: "Transfers", icon: ArrowRightLeft },
@@ -29,6 +31,28 @@ export default function Navbar() {
       : `${API_BASE_URL}${user.profile_picture}`
     : "";
 
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const profileDropdownRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (profileDropdownRef.current && !profileDropdownRef.current.contains(event.target)) {
+        setShowProfileMenu(false);
+      }
+    }
+
+    if (showProfileMenu) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+    return undefined;
+  }, [showProfileMenu]);
+
+  function handleLogout() {
+    setShowProfileMenu(false);
+    logout();
+  }
+
   return (
     <nav className="sticky top-0 z-50 w-full border-b border-border/30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 shadow-sm">
       <div className="container mx-auto flex h-16 items-center px-4 md:px-8">
@@ -40,9 +64,9 @@ export default function Navbar() {
           <div
             role="img"
             aria-label="Fantasy Football logo"
-            className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary/90 to-primary/60 text-primary-foreground font-bold text-lg shadow"
+            className="h-9 w-9 rounded-lg overflow-hidden bg-black/20 shadow"
           >
-            F
+            <img src="/FF_App_logo.png" alt="Fantasy Football" className="h-full w-full object-cover" />
           </div>
           <span className="hidden font-bold sm:inline-block text-lg tracking-tight">
             Fantasy Football
@@ -50,7 +74,7 @@ export default function Navbar() {
         </Link>
 
         <div className="flex flex-1 items-center justify-between space-x-2 md:justify-end">
-          <nav className="hidden md:flex items-center space-x-6 text-sm font-medium">
+          <nav className="hidden md:flex items-center md:space-x-4 lg:space-x-6 text-sm font-medium">
             {[...links, ...(user?.role === "admin" ? adminLinks : [])]
               .filter((item) => {
                 if (isAuthenticated) return true;
@@ -89,14 +113,17 @@ export default function Navbar() {
                 );
               })}
           </nav>
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-4 md:ml-6 md:pl-4 md:border-l md:border-border/30">
             {/* Profile / Auth actions */}
             {isAuthenticated ? (
-              <>
-                <Link
-                  href={APP_ROUTES.profile}
-                  className="hidden md:inline-flex items-center gap-3"
+              <div className="hidden md:relative md:inline-block" ref={profileDropdownRef}>
+                <button
+                  onClick={() => setShowProfileMenu((prev) => !prev)}
+                  className="inline-flex items-center gap-2 max-w-[180px]"
+                  aria-label="Open profile menu"
+                  type="button"
                 >
+                  <span className="text-sm font-medium truncate">{user?.username || "User"}</span>
                   <div className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold overflow-hidden">
                     {profilePicture ? (
                       <img src={profilePicture} alt="Profile" className="h-full w-full object-cover" />
@@ -104,17 +131,29 @@ export default function Navbar() {
                       user?.username?.[0]?.toUpperCase() || <User className="h-4 w-4" />
                     )}
                   </div>
-                </Link>
-                <button
-                  onClick={logout}
-                  className="btn-primary hidden md:inline-flex h-9"
-                  aria-label="Sign out"
-                  type="button"
-                >
-                  <LogOut className="mr-2 h-4 w-4" />
-                  Sign Out
                 </button>
-              </>
+
+                {showProfileMenu ? (
+                  <div className="absolute right-0 mt-2 w-48 bg-background border border-border rounded-lg shadow-lg z-50 overflow-hidden">
+                    <Link
+                      href={APP_ROUTES.profile}
+                      onClick={() => setShowProfileMenu(false)}
+                      className="flex items-center gap-2 px-4 py-2 text-sm hover:bg-muted/50"
+                    >
+                      <Settings className="h-4 w-4" />
+                      Profile Settings
+                    </Link>
+                    <button
+                      onClick={handleLogout}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-muted/50 text-left"
+                      type="button"
+                    >
+                      <LogOut className="h-4 w-4" />
+                      Logout
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             ) : (
               <>
                 <Link

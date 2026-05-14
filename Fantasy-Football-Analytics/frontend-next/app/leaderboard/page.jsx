@@ -24,7 +24,7 @@ const itemVariants = {
 
 export default function LeaderboardPage() {
   const [rows, setRows] = useState([]);
-  const [activeTab, setActiveTab] = useState('global');
+  const [activeTab, setActiveTab] = useState('all-time');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -62,7 +62,7 @@ export default function LeaderboardPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center">
             <Trophy className="mr-3 h-8 w-8 text-primary" />
-            {activeTab === 'weekly' ? 'Weekly Leaderboard' : 'Global Leaderboard'}
+            {activeTab === 'weekly' ? 'Weekly Leaderboard' : 'All Time Leaderboard'}
           </h1>
           <p className="text-muted-foreground mt-2">
             See how your team stacks up against managers worldwide.
@@ -70,7 +70,7 @@ export default function LeaderboardPage() {
         </div>
         <div className="flex p-1 bg-muted rounded-xl">
           {[
-            { id: 'global', label: 'Global' },
+            { id: 'all-time', label: 'All Time' },
             { id: 'weekly', label: 'Weekly' },
           ].map((tab) => (
             <button

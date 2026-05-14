@@ -23,6 +23,21 @@ const itemVariants = {
   },
 };
 
+function formatAlertDate(dateString) {
+  try {
+    const date = new Date(dateString);
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const dayName = days[date.getUTCDay()];
+    const dayNum = date.getUTCDate();
+    const monthName = months[date.getUTCMonth()];
+    const year = date.getUTCFullYear();
+    return `${dayName}, ${dayNum} ${monthName} ${year}`;
+  } catch (e) {
+    return "Unknown date";
+  }
+}
+
 export default function DashboardPage() {
   const [data, setData] = useState(null);
   const [notifications, setNotifications] = useState([]);
@@ -56,8 +71,8 @@ export default function DashboardPage() {
     return (
       <div className="container mx-auto p-6 md:p-10 space-y-8 animate-pulse">
         <div className="h-10 w-48 bg-muted rounded-md mb-8"></div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {[1, 2, 3, 4].map((i) => (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {[1, 2, 3].map((i) => (
             <div key={i} className="card h-32" />
           ))}
         </div>
@@ -96,12 +111,6 @@ export default function DashboardPage() {
       icon: Activity,
       color: "text-green-500",
     },
-    {
-      label: "Transfers Left",
-      value: data?.transfers_left || "0",
-      icon: Users,
-      color: "text-purple-500",
-    },
   ];
 
   return (
@@ -124,7 +133,7 @@ export default function DashboardPage() {
         {/* Stats Row */}
         <motion.div
           variants={containerVariants}
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6"
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"
         >
           {stats.map((stat, idx) => (
             <motion.div
@@ -227,10 +236,6 @@ export default function DashboardPage() {
                 <span className="text-muted-foreground">Rank</span>
                 <span className="font-bold">{data?.rank || "N/A"}</span>
               </div>
-              <div className="flex justify-between items-center p-2 rounded border border-border/30">
-                <span className="text-muted-foreground">Transfers Left</span>
-                <span className="font-bold text-green-500">{data?.transfers_left || 0}</span>
-              </div>
             </div>
           </div>
           <div className="card p-6">
@@ -241,6 +246,11 @@ export default function DashboardPage() {
             <div className="space-y-3 text-sm">
               {notifications.slice(0, 4).map((alert) => (
                 <div key={alert.id} className="p-3 rounded border border-border/30">
+                  {alert.created_at && (
+                    <p className="text-xs text-muted-foreground mb-1">
+                      {formatAlertDate(alert.created_at)}
+                    </p>
+                  )}
                   <p className="font-medium">{alert.message}</p>
                   <p className="text-xs text-muted-foreground mt-1">{alert.type}</p>
                 </div>

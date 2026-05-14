@@ -105,7 +105,7 @@ export default function Navbar() {
                     {isActive && (
                       <motion.div
                         layoutId="navbar-active"
-                        className="absolute -bottom-[21px] left-0 right-0 h-[2px] bg-primary"
+                        className="absolute -bottom-5.25 left-0 right-0 h-0.5 bg-primary"
                         transition={{ type: "spring", stiffness: 380, damping: 30 }}
                       />
                     )}
@@ -119,7 +119,7 @@ export default function Navbar() {
               <div className="hidden md:relative md:inline-block" ref={profileDropdownRef}>
                 <button
                   onClick={() => setShowProfileMenu((prev) => !prev)}
-                  className="inline-flex items-center gap-2 max-w-[180px]"
+                  className="inline-flex items-center gap-2 max-w-45"
                   aria-label="Open profile menu"
                   type="button"
                 >
